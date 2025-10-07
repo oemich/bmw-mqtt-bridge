@@ -72,7 +72,7 @@ Before you can use this bridge, you need your **Client ID** and **GCID** from th
 1. Go to the **MyBMW** website for your country (URL differs per region).  
 2. Log in with your existing BMW account (your car must already be registered).  
 3. Navigate to **Vehicle Overview** → **BMW CarData**.  
-4. Click **“Create Client Data”**.  
+4. Click **“Create Client Data”**.  (do NOT click "autheticate vehicle")
 5. Copy the displayed **Client ID** — you will need it in:
    - `bmw_flow.sh`  
    - `bmw_refresh.sh`  

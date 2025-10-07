@@ -115,14 +115,14 @@ refresh_token.txt
 
 ## 🔁 Step 3: Token Refresh
 
-To refresh tokens later (e.g. from a cron job or systemd service):
+To refresh tokens later (automatically done by bmw-mqtt-bridge.cpp, no need for manual execution):
 
 ```bash
 chmod +x bmw_refresh.sh
 ./bmw_refresh.sh
 ```
 
-The bridge also calls this automatically when your token nears expiry.
+The bridge calls this automatically when your token nears expiry. Do NOT call this manually when the bridge is running.
 
 ---
 

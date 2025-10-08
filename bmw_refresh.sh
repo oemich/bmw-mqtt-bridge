@@ -52,12 +52,12 @@
 set -euo pipefail
 
 # ---------- Config ----------
-CLIENT_ID="${CLIENT_ID:-12345678-abcd-ef12-3456-789012345678}"
-TOKEN_ENDPOINT="${TOKEN_ENDPOINT:-https://customer.bmwgroup.com/gcdm/oauth/token}"
-REFRESH_TOKEN_FILE="${REFRESH_TOKEN_FILE:-refresh_token.txt}"
-OUT_DIR="${OUT_DIR:-.}"
-DEBUG="${DEBUG:-0}"
-WRITE_ID_EXP="${WRITE_ID_EXP:-0}"
+CLIENT_ID="12345678-abcd-ef12-3456-789012345678"
+TOKEN_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/token"
+REFRESH_TOKEN_FILE="refresh_token.txt"
+OUT_DIR="$."
+DEBUG="0"
+WRITE_ID_EXP="0"
 
 # ---------- Pre-flight ----------
 need() { command -v "$1" >/dev/null 2>&1 || { echo "✖ Missing dependency: $1" >&2; exit 1; }; }

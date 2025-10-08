@@ -63,10 +63,10 @@
 set -euo pipefail
 
 # ---------- Configuration (can be overridden via env) ----------
-CLIENT_ID="${CLIENT_ID:-12345678-abcd-ef12-3456-789012345678}"
-DEVICE_ENDPOINT="${DEVICE_ENDPOINT:-https://customer.bmwgroup.com/gcdm/oauth/device/code}"
-TOKEN_ENDPOINT="${TOKEN_ENDPOINT:-https://customer.bmwgroup.com/gcdm/oauth/token}"
-SCOPES="${SCOPES:-authenticate_user openid cardata:streaming:read}"
+CLIENT_ID="12345678-abcd-ef12-3456-789012345678"
+DEVICE_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/device/code"
+TOKEN_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/token"
+SCOPES="authenticate_user openid cardata:streaming:read"
 
 # ---------- Pre-flight checks ----------
 need() { command -v "$1" >/dev/null 2>&1 || { echo "✖ Missing dependency: $1" >&2; exit 1; }; }

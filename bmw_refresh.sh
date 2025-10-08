@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # -----------------------------------------------------------------------------
-# bmw_flow.sh
+# bmw_refresh.sh
 #
-# Obtain a new BMW CarData OAuth2 device code and generate id_token / refresh_token.
-# Requires manual user authorization via the provided BMW login URL.
+# refresh an ID-token
 #
 # Copyright (c) 2025 Kurt, DJ0ABR
 #
@@ -25,7 +24,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 # -----------------------------------------------------------------------------
-# bmw_refresh.sh
 #
 # Purpose:
 #   Refresh BMW OAuth tokens using a refresh_token.

@@ -47,148 +47,74 @@ Tested on:
 
 ---
 
-## 🧰 Installation
+## 📥 Download and Preparation
 
 ```bash
-git clone https://github.com/<yourname>/bmw-mqtt-bridge.git
-cd bmw-mqtt-bridge
-chmod +x install_deps.sh
+# Clone the repository
+git clone https://github.com/dj0abr/bmw-mqtt-bridge.git
+
+# Make scripts executable
+chmod +x install_deps.sh compile.sh bmw_flow.sh bmw_refresh.sh
+
+# Install dependencies
 ./install_deps.sh
 ```
 
-This installs:
-- `build-essential`
-- `libmosquitto-dev`
-- `libcurl4-openssl-dev`
-- `jq`, `openssl`, `nlohmann-json3-dev`
-- (optional) `mosquitto`, `mosquitto-clients`
+---
+
+## 🚗 Get Your BMW IDs
+
+1. Go to the [MyBMW website](https://www.bmw-connecteddrive.com/)  
+   (You should already have an account and your car should be registered.)
+2. Navigate to **Personal Data → My Vehicles → CarData**  
+3. Click on **"Create Client ID"**  
+   ⚠️ *Do **not** click on "Authenticate Vehicle"*
+4. Copy the **Client ID** and insert it into:
+   - `bmw_flow.sh`
+   - `bmw_refresh.sh`
+   - `bmw_mqtt_bridge.cpp`
+5. Scroll down to **CARDATA STREAM → Show Connection Details**
+6. Copy the **USERNAME** and insert it into `bmw_mqtt_bridge.cpp` as **GCID**
 
 ---
 
-## 🔍 Step 1: Get Your BMW Client ID
-
-Before you can use this bridge, you need your **Client ID** and **GCID** from the BMW CarData portal.
-
-1. Go to the **MyBMW** website for your country (URL differs per region).  
-2. Log in with your existing BMW account (your car must already be registered).  
-3. Navigate to **Vehicle Overview** → **BMW CarData**.  
-4. Click **“Create Client Data”**.  (do NOT click "autheticate vehicle")
-5. Copy the displayed **Client ID** — you will need it in:
-   - `bmw_flow.sh`  
-   - `bmw_refresh.sh`  
-   - and inside `bmw_mqtt_bridge.cpp` (`CLIENT_ID` constant)
-6. Activate **CarData Stream**.  
-7. Scroll down to **CarData Streaming** → **Show Connection Details**.  
-8. Copy the displayed **Username** — this is your **GCID**.  
-   - Paste it into `bmw_mqtt_bridge.cpp` under the variable `GCID`.
-
-Once both values are configured, you can proceed with authentication.
-
----
-
-## 🔑 Step 2: Initial Token Setup
-
-Run the **device flow script** to get your first tokens:
+## ⚙️ Compile the Program
 
 ```bash
-chmod +x bmw_flow.sh
-./bmw_flow.sh
-```
-
-You’ll see output like:
-```
-1) Requesting device code…
-2) Open this URL in your browser:
-   https://customer.bmwgroup.com/...
-```
-
-Log in with your BMW account, confirm access, then the script saves:
-```
-access_token.txt
-id_token.txt
-refresh_token.txt
-```
-
-> The file **id_token.txt** is used as MQTT password.
-
----
-
-## 🔁 Step 3: Token Refresh
-
-To refresh tokens later (automatically done by bmw-mqtt-bridge.cpp, no need for manual execution):
-
-```bash
-chmod +x bmw_refresh.sh
-./bmw_refresh.sh
-```
-
-The bridge calls this automatically when your token nears expiry. Do NOT call this manually when the bridge is running.
-
----
-
-## 🚀 Step 4: Build the Bridge
-
-Compile manually or via the helper script:
-
-```bash
-chmod +x compile.sh
 ./compile.sh
 ```
 
-Example manual build:
+---
+
+## 🔑 Get Your First BMW Token
+
 ```bash
-g++ -std=c++17 -O2 -pthread     bmw_mqtt_bridge.cpp -o bmw_mqtt_bridge     -lmosquitto -lcurl
+./bmw_flow.sh
 ```
+
+1. A URL will be displayed in the terminal.  
+2. Copy it into your browser and log in with your BMW account.  
+3. Once the login is successful, return to the terminal and press **ENTER**.  
+4. The tokens will be written to disk.
 
 ---
 
-## 🔌 Step 4: Run the Bridge
+## 🚀 Start the Bridge
 
-Run manually:
 ```bash
 ./bmw_mqtt_bridge
 ```
 
-It will:
-- Connect securely to BMW’s MQTT broker (`customer.streaming-cardata.bmwgroup.com:9000`)
-- Mirror messages to your **local Mosquitto** at `127.0.0.1:1883`
-- Republish under `bmw/<VIN>/...`
-
-Status messages are published on:
-```
-bmw/status
-```
-
-Example payload:
-```json
-{
-  "connected": true,
-  "timestamp": 1759612345
-}
-```
-
 ---
 
-## 🧠 How It Works
+## 📝 Notes
 
-- `bmw_flow.sh` → gets your first OAuth2 tokens (manual login required)
-- `bmw_refresh.sh` → uses the refresh_token to renew credentials
-- `bmw_mqtt_bridge.cpp` → connects to the BMW MQTT broker using `id_token`
-- The bridge automatically detects token expiry via JWT decoding (`exp` field)
-- Before expiry, it runs `bmw_refresh.sh`, reloads tokens, and reconnects
+- Your **local MQTT server** must run on the **same PC** as this program.  
+- If it runs on a different PC, edit the IP address in  
+  `bmw_mqtt_bridge.cpp` — look for the line:
 
----
-
-## ⚡ Local MQTT Example
-
-Subscribe to all BMW topics locally:
-```bash
-mosquitto_sub -h 127.0.0.1 -t 'bmw/#' -v
-```
-
-Or view just the status:
-```bash
-mosquitto_sub -h 127.0.0.1 -t 'bmw/status' -v
+```cpp
+#define LOCAL_HOST "127.0.0.1"
 ```
 
 ---

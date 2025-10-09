@@ -97,6 +97,15 @@ chmod +x install_deps.sh compile.sh bmw_flow.sh bmw_refresh.sh
 3. Once the login is successful, return to the terminal and press **ENTER**.  
 4. The tokens will be written to disk.
 
+⚠️ **Note:**  
+The BMW token expires after **1 hour** and becomes invalid.  
+If the `bmw_mqtt_bridge` is not used for more than 1 hour,  
+you will need to log in again manually by running:
+
+```bash
+./bmw_flow.sh
+```
+
 ---
 
 ## 🚀 Start the Bridge

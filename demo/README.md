@@ -32,19 +32,6 @@ Restart Mosquitto:
 sudo systemctl restart mosquitto
 ```
 
-Check that both ports are active:
-
-```bash
-sudo netstat -tulpen | grep mosquitto
-```
-
-Expected output:
-
-```
-tcp   0   0 0.0.0.0:1883   0.0.0.0:*   LISTEN  mosquitto
-tcp6  0   0 :::9001        :::*        LISTEN  mosquitto
-```
-
 ---
 
 ## 🗺️ Web Client (HTML Map)

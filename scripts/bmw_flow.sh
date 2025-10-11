@@ -62,12 +62,19 @@
 
 set -euo pipefail
 
+# load .env if present (export all vars temporarily)
+if [[ -f ".env" ]]; then
+  set -a
+  . ./.env
+  set +a
+fi
+
 # ---------- Configuration (can be overridden via env) ----------
 : "${CLIENT_ID:=12345678-abcd-ef12-3456-789012345678}"  # Use default only if CLIENT_ID is unset or empty
 DEVICE_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/device/code"
 TOKEN_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/token"
 SCOPES="authenticate_user openid cardata:streaming:read"
-: "${OUT_DIR:="$."}"  # Use default only if OUT_DIR is unset or empty
+: "${OUT_DIR:="."}"  # Use default only if OUT_DIR is unset or empty
 
 # ---------- Pre-flight checks ----------
 need() { command -v "$1" >/dev/null 2>&1 || { echo "✖ Missing dependency: $1" >&2; exit 1; }; }

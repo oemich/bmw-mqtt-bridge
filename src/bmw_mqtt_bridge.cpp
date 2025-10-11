@@ -159,6 +159,13 @@ static std::mt19937 rng{std::random_device{}()};
 static long jitter_ms(long base_ms){ std::uniform_int_distribution<int> d(-250,250); return base_ms + d(rng); }
 
 // ===================== Helpers =====================
+// Helper: dirname
+static std::string dirname_of(const std::string& p){
+    std::filesystem::path pp(p);
+    auto d = pp.parent_path();
+    return d.empty() ? std::string(".") : d.string();
+}
+
 static void bmw_full_reconnect(){
     // alten Client sauber neu aufbauen
     if (g_bmw) {
@@ -684,14 +691,22 @@ static bool refresh_tokens() {
     curl_slist_free_all(hdrs);
     curl_easy_cleanup(c);
 
-    // save entire response (debug) – as in the script
+    // determine target paths based on configured files
+    std::string id_path  = ID_TOKEN_FILE;                  // e.g. "./id_token.txt"
+    std::string rt_path  = REFRESH_TOKEN_FILE;             // e.g. "./refresh_token.txt"
+    std::string dir      = dirname_of(id_path);
+    std::string at_path  = (std::filesystem::path(dir) / "access_token.txt").string();
+
+    // save entire response (debug) in same directory as token files
     // (pretty-printed, falls back to raw on parse error)
     try {
         json dbg = json::parse(resp);
-        write_file_mode("token_refresh_response.json", dbg.dump(2) + "\n", 0640);
+        write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
+                        dbg.dump(2) + "\n", 0640);
     } catch (...) {
         // if not JSON: save raw response
-        write_file_mode("token_refresh_response.json", resp, 0640);
+        write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
+                        resp, 0640);
     }
 
     if (http_code != 200) {
@@ -747,10 +762,10 @@ static bool refresh_tokens() {
         return false;
     }
 
-    // move (rename is atomic on the same FS)
-    if (std::rename((tmpdir + "/id_token.txt").c_str(),      "id_token.txt")      != 0 ||
-        std::rename((tmpdir + "/refresh_token.txt").c_str(), "refresh_token.txt") != 0 ||
-        std::rename((tmpdir + "/access_token.txt").c_str(),  "access_token.txt")  != 0) {
+    // move (rename is atomic on the same FS) to configured target paths
+    if (std::rename((tmpdir + "/id_token.txt").c_str(),      id_path.c_str()) != 0 ||
+        std::rename((tmpdir + "/refresh_token.txt").c_str(), rt_path.c_str()) != 0 ||
+        std::rename((tmpdir + "/access_token.txt").c_str(),  at_path.c_str()) != 0) {
         std::cerr << "[bridge] rename() token files failed\n";
         std::error_code ec;
         std::filesystem::remove_all(tmpdir, ec);

@@ -53,7 +53,7 @@ set -euo pipefail
 : "${CLIENT_ID:=12345678-abcd-ef12-3456-789012345678}"  # Use default only if CLIENT_ID is unset or empty
 TOKEN_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/token"
 : "${REFRESH_TOKEN_FILE:="./refresh_token.txt"}"  # Use default only if REFRESH_TOKEN_FILE is unset or empty
-: "${OUT_DIR:="$."}"  # Use default only if OUT_DIR is unset or empty
+: "${OUT_DIR:="."}"  # Use default only if OUT_DIR is unset or empty
 DEBUG="0"
 WRITE_ID_EXP="0"
 

@@ -67,7 +67,7 @@ set -euo pipefail
 DEVICE_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/device/code"
 TOKEN_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/token"
 SCOPES="authenticate_user openid cardata:streaming:read"
-: "${OUT_DIR:="$."}"  # Use default only if OUT_DIR is unset or empty
+: "${OUT_DIR:="."}"  # Use default only if OUT_DIR is unset or empty
 
 # ---------- Pre-flight checks ----------
 need() { command -v "$1" >/dev/null 2>&1 || { echo "✖ Missing dependency: $1" >&2; exit 1; }; }

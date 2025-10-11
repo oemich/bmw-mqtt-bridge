@@ -45,7 +45,7 @@ RUN chmod +x bmw_flow.sh bmw_refresh.sh
 # Environment variables for configuration
 ENV BMW_HOST="customer.streaming-cardata.bmwgroup.com" \
     BMW_PORT=9000 \
-    LOCAL_HOST="127.0.1" \
+    LOCAL_HOST="127.0.0.1" \
     LOCAL_PORT=1883 \
     LOCAL_PREFIX="bmw/" \
     OUT_DIR="/app/tokens" \

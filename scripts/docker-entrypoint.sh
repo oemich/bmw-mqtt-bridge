@@ -1,24 +1,32 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Create directory for token files if it doesn't exist
-mkdir -p /app/tokens
+# Token directory (from ENV or default)
+OUT_DIR="${OUT_DIR:-/app/tokens}"
 
-# Create symbolic links for token files in volume
-ln -sf /app/tokens/id_token.txt /app/id_token.txt
-ln -sf /app/tokens/refresh_token.txt /app/refresh_token.txt
+# Ensure it exists
+mkdir -p "$OUT_DIR"
 
-# If specific command provided, execute it
-if [ "$1" = "./bmw_flow.sh" ] || [ "$1" = "bash" ]; then
-    exec "$@"
+# If token files exist, create/update symlinks
+if [ -f "$OUT_DIR/id_token.txt" ]; then
+  ln -sf "$OUT_DIR/id_token.txt" /app/id_token.txt
+fi
+if [ -f "$OUT_DIR/refresh_token.txt" ]; then
+  ln -sf "$OUT_DIR/refresh_token.txt" /app/refresh_token.txt
 fi
 
-# Check if we need initial authentication
-if [ ! -f ./id_token.txt ] || [ ! -f ./refresh_token.txt ]; then
-    echo "No token files found. Please run initial authentication first:"
-    echo "docker-compose run --rm bmw-bridge ./bmw_flow.sh"
-    exit 1
+# If a command was passed -> execute it directly
+if [ "$#" -gt 0 ]; then
+  exec "$@"
 fi
 
-# Start the bridge
+# Check if initial authentication is necessary
+if [ ! -f /app/id_token.txt ] || [ ! -f /app/refresh_token.txt ]; then
+  echo "No token files found."
+  echo "Please perform the initial authentication, e.g.:"
+  echo "  docker compose run --rm bmw-bridge ./bmw_flow.sh"
+  exit 1
+fi
+
+# Start the bridge (handles refresh itself now)
 exec ./bmw_mqtt_bridge

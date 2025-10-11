@@ -114,7 +114,7 @@ nano .env   # see section "Get Your BMW IDs" below
 docker compose build
 
 # Authenticate with BMW
-docker compose run --rm bmw-bridge ./scripts/bmw_flow.sh
+docker compose run --rm bmw-bridge ./bmw_flow.sh
 
 Open the displayed URL in your browser, log in,  
 then return and press **ENTER**.

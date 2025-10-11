@@ -43,16 +43,16 @@
 //       $(pkg-config --cflags --libs libmosquitto) -lcurl
 //
 // Runtime configuration (env overrides):
-//   CLIENT_ID          : BMW CarData client ID (GUID)              (default: placeholder)
-//   GCID               : BMW GCID / username for the MQTT broker   (default: placeholder)
-//   BMW_HOST           : customer.streaming-cardata.bmwgroup.com   (default: set)
-//   BMW_PORT           : 9000                                      (default: 9000)
-//   LOCAL_HOST         : 127.0.0.1                                 (default: 127.0.0.1)
-//   LOCAL_PORT         : 1883                                      (default: 1883)
-//   LOCAL_PREFIX       : bmw/                                      (default: bmw/)
-//   ID_TOKEN_FILE      : ./id_token.txt                            (default: ./id_token.txt)
-//   REFRESH_TOKEN_FILE : ./refresh_token.txt                       (default: ./refresh_token.txt)
-//   REFRESH_SCRIPT     : ./bmw_refresh.sh                          (default: ./bmw_refresh.sh)
+//   CLIENT_ID        : BMW CarData client ID (GUID)              (default: placeholder)
+//   GCID             : BMW GCID / username for the MQTT broker   (default: placeholder)
+//   BMW_HOST         : customer.streaming-cardata.bmwgroup.com   (default: set)
+//   BMW_PORT         : 9000                                      (default: 9000)
+//   LOCAL_HOST       : 127.0.0.1                                 (default: 127.0.0.1)
+//   LOCAL_PORT       : 1883                                      (default: 1883)
+//   LOCAL_PREFIX     : bmw/                                      (default: bmw/)
+//   ID_TOKEN_FILE    : ./id_token.txt                            (default: ./id_token.txt)
+//   REFRESH_FILE     : ./refresh_token.txt                       (default: ./refresh_token.txt)
+//   REFRESH_SCRIPT   : ./bmw_refresh.sh                          (default: ./bmw_refresh.sh)
 //
 // Notes:
 //   - id_token (a JWT) is used as the MQTT password; we parse its 'exp' to know validity.
@@ -77,11 +77,17 @@
 #include <unistd.h>     // access()
 #include <sys/wait.h>   // WIFEXITED, WEXITSTATUS
 #include <ctime>
+#include <filesystem>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #ifndef NLOHMANN_JSON_HPP
   #include "json.hpp" // nlohmann/json header (json.hpp next to this file)
 #endif
 using json = nlohmann::json;
+
+static bool refresh_tokens();
+static mosquitto* create_bmw_client();
 
 // ---------------------- tiny helpers for env config ----------------------
 static std::string env_str(const char* key, const char* defv){
@@ -97,26 +103,44 @@ static int env_int(const char* key, int defv){
         return defv;
     }
 }
+static std::string trim_copy(const std::string& s){
+    auto isws = [](unsigned char c){ return c=='\n'||c=='\r'||c=='\t'||c==' '; };
+    size_t a=0,b=s.size();
+    while(a<b && isws((unsigned char)s[a])) ++a;
+    while(b>a && isws((unsigned char)s[b-1])) --b;
+    return s.substr(a,b-a);
+}
 
-// ===================== Configuration (defaults; can be overridden via env) =====================
-static std::string CLIENT_ID   = env_str("CLIENT_ID",  "12345678-abcd-ef12-3456-789012345678");
-static std::string GCID        = env_str("GCID",       "98765432-efdc-ba98-7654-321098765432");
+static void load_env_file(const std::string& path=".env"){
+    std::ifstream f(path);
+    if(!f) return;
+    std::string line;
+    while(std::getline(f, line)){
+        if(line.empty() || line[0]=='#') continue;
+        auto pos = line.find('=');
+        if(pos==std::string::npos) continue;
+        std::string key = trim_copy(line.substr(0,pos));
+        std::string val = trim_copy(line.substr(pos+1));
+        // einfache Quote-Handhabung
+        if(val.size()>=2 && ((val.front()=='"' && val.back()=='"') || (val.front()=='\'' && val.back()=='\''))){
+            val = val.substr(1, val.size()-2);
+        }
+        if(!key.empty()) setenv(key.c_str(), val.c_str(), 1);
+    }
+}
 
-static std::string BMW_HOST    = env_str("BMW_HOST",   "customer.streaming-cardata.bmwgroup.com");
-static int         BMW_PORT    = env_int("BMW_PORT",   9000);
-
-static std::string LOCAL_HOST  = env_str("LOCAL_HOST", "127.0.0.1");
-static int         LOCAL_PORT  = env_int("LOCAL_PORT", 1883);
-static std::string LOCAL_PREFIX= env_str("LOCAL_PREFIX", "bmw/");
-static std::string LOCAL_USER  = env_str("LOCAL_USER", "");
-static std::string LOCAL_PASSWORD = env_str("LOCAL_PASSWORD", "");
-
-// Token files from your flow/refresh scripts:
-static std::string ID_TOKEN_FILE = env_str("ID_TOKEN_FILE", "./id_token.txt");
-static std::string REFRESH_TOKEN_FILE  = env_str("REFRESH_TOKEN_FILE",  "./refresh_token.txt");
-
-// Path to refresh script
-static std::string REFRESH_SCRIPT = env_str("REFRESH_SCRIPT", "./bmw_refresh.sh");
+// ===================== Configuration =====================
+static std::string CLIENT_ID;
+static std::string GCID;
+static std::string BMW_HOST;
+static int         BMW_PORT;
+static std::string LOCAL_HOST;
+static int         LOCAL_PORT;
+static std::string LOCAL_PREFIX;
+static std::string LOCAL_USER;
+static std::string LOCAL_PASSWORD;
+static std::string ID_TOKEN_FILE;
+static std::string REFRESH_TOKEN_FILE;
 
 // ===================== Globals =====================
 static std::atomic<bool> g_stop{false};
@@ -135,6 +159,25 @@ static std::mt19937 rng{std::random_device{}()};
 static long jitter_ms(long base_ms){ std::uniform_int_distribution<int> d(-250,250); return base_ms + d(rng); }
 
 // ===================== Helpers =====================
+static void bmw_full_reconnect(){
+    // alten Client sauber neu aufbauen
+    if (g_bmw) {
+        mosquitto_loop_stop(g_bmw, true);
+        mosquitto_destroy(g_bmw);
+        g_bmw = nullptr;
+    }
+    g_bmw = create_bmw_client();
+    if (!g_bmw) {
+        std::cerr << "[bridge] rebuild failed (mosquitto_new)\n";
+        return;
+    }
+    mosquitto_loop_start(g_bmw);
+
+    int rc = mosquitto_connect_async(g_bmw, BMW_HOST.c_str(), BMW_PORT, 30);
+    g_last_connect_attempt = time(nullptr);
+    std::cerr << "[bridge] rebuild+connect rc=" << rc << "\n";
+}
+
 static void publish_status(bool connected) {
     if (!g_local) return;
     json j;
@@ -213,45 +256,6 @@ static size_t curl_write_cb(void* ptr, size_t size, size_t nmemb, void* userdata
     auto* s = static_cast<std::string*>(userdata);
     s->append(static_cast<const char*>(ptr), size*nmemb);
     return size*nmemb;
-}
-
-static bool refresh_tokens() {
-    // ensure script is executable
-    if (access(REFRESH_SCRIPT.c_str(), X_OK) != 0) {
-        std::cerr << "[bridge] refresh script not executable: " << REFRESH_SCRIPT << "\n";
-        return false;
-    }
-
-    int rc = std::system( (REFRESH_SCRIPT + " >/dev/null 2>&1").c_str() );
-    if (rc == -1) {
-        std::cerr << "[bridge] refresh script spawn failed\n";
-        return false;
-    }
-    if (WIFEXITED(rc) == 0 || WEXITSTATUS(rc) != 0) {
-        std::cerr << "[bridge] refresh script failed, rc=" << rc
-                  << " exit=" << (WIFEXITED(rc) ? WEXITSTATUS(rc) : -1) << "\n";
-        return false;
-    }
-
-    // read new tokens
-    std::string new_id = trim(read_file(ID_TOKEN_FILE));
-    std::string new_rt = trim(read_file(REFRESH_TOKEN_FILE));
-    if (new_id.empty() || new_rt.empty()) {
-        std::cerr << "[bridge] refresh: token files empty after script\n";
-        return false;
-    }
-
-    g_id_token      = new_id;
-    g_refresh_token = new_rt;
-    g_id_token_exp  = jwt_exp_unix(g_id_token);
-    if (g_id_token_exp.load() == 0) {
-        std::cerr << "[bridge] refresh: invalid id_token (no exp)\n";
-        return false;
-    }
-
-    std::cout << "[bridge] token refreshed via script, exp=" << g_id_token_exp
-              << " (in " << (g_id_token_exp.load() - time(nullptr)) << "s)\n";
-    return true;
 }
 
 // ===================== MQTT Callbacks =====================
@@ -393,6 +397,22 @@ int main(){
     std::signal(SIGINT,  sigint_handler);
     std::signal(SIGTERM, sigint_handler);
 
+    // load .env if exists
+    load_env_file(".env");
+
+    // initialize
+    CLIENT_ID        = env_str("CLIENT_ID",        "12345678-abcd-ef12-3456-789012345678");
+    GCID             = env_str("GCID",             "98765432-efdc-ba98-7654-321098765432");
+    BMW_HOST         = env_str("BMW_HOST",         "customer.streaming-cardata.bmwgroup.com");
+    BMW_PORT         = env_int("BMW_PORT",         9000);
+    LOCAL_HOST       = env_str("LOCAL_HOST",       "127.0.0.1");
+    LOCAL_PORT       = env_int("LOCAL_PORT",       1883);
+    LOCAL_PREFIX     = env_str("LOCAL_PREFIX",     "bmw/");
+    LOCAL_USER       = env_str("LOCAL_USER",       "");
+    LOCAL_PASSWORD   = env_str("LOCAL_PASSWORD",   "");
+    ID_TOKEN_FILE    = env_str("ID_TOKEN_FILE",    "./id_token.txt");
+    REFRESH_TOKEN_FILE=env_str("REFRESH_TOKEN_FILE","./refresh_token.txt");
+
     // refresh logic constants
     constexpr long CLOCK_SKEW_SECS   = 60;    // 1 min safety for clock drift
 
@@ -488,27 +508,27 @@ int main(){
             std::cout << "[bridge] token refresh (" << (due_soft ? "soft" : "hard") << ")\n";
 
             if (refresh_tokens()){
-                last_refresh_attempt   = now;
-                last_successful_refresh= now;
+                last_refresh_attempt    = now;
+                last_successful_refresh = now;
 
-                mosquitto_username_pw_set(g_bmw, GCID.c_str(), g_id_token.c_str());
+                int upw_rc = mosquitto_username_pw_set(g_bmw, GCID.c_str(), g_id_token.c_str());
+                if (upw_rc != MOSQ_ERR_SUCCESS) {
+                    std::cerr << "[bridge] username_pw_set rc=" << upw_rc << "\n";
+                }
 
                 g_connected = false;
                 publish_status(false);
-                mosquitto_disconnect(g_bmw);
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(200 + (rng() % 300)));
+                // leichtes Backoff + Jitter wie beim Script-Flow
+                long delay_ms = 1500 + (rng()%500);
+                g_next_connect_after = time(nullptr) + 1; // 1s Sperre, nur zur Sicherheit
+                std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
 
-                if (time(nullptr) >= g_next_connect_after.load()) {
-                    int rc = mosquitto_reconnect_async(g_bmw);
-                    g_last_connect_attempt = time(nullptr); // aktiv setzen, nicht nur via Log
-                    std::cout << "[bridge] reconnect_async after refresh rc=" << rc << "\n";
-                } else {
-                    std::cout << "[bridge] skip reconnect due to backoff\n";
-                }
+                // kompletter Rebuild → verhindert TLS/State-Races
+                bmw_full_reconnect();
             } else {
                 last_refresh_attempt = now;
-                g_next_connect_after = now + 15; // short local backoff to avoid spam
+                g_next_connect_after = now + 15;
                 std::cerr << "[bridge] refresh failed, retry soon\n";
             }
         }
@@ -562,4 +582,194 @@ int main(){
     curl_global_cleanup();
     std::cout << "[bridge] bye\n";
     return 0;
+}
+
+
+// ============= refresh tokens =============
+
+// small utility: safely writes a file (0640)
+static bool write_file_mode(const std::string& path, const std::string& data, mode_t mode=0640){
+    int fd = ::open(path.c_str(), O_CREAT|O_TRUNC|O_WRONLY, mode);
+    if (fd < 0) return false;
+    ssize_t want = (ssize_t)data.size();
+    const char* p = data.data();
+    while (want > 0){
+        ssize_t n = ::write(fd, p, want);
+        if (n <= 0) { ::close(fd); return false; }
+        want -= n; p += n;
+    }
+    ::fsync(fd);
+    ::close(fd);
+    return true;
+}
+
+// form-urlencode for a key/value with libcurl (uses its own CURL easy handle)
+static std::string urlencode_component(const std::string& s){
+    CURL* h = curl_easy_init();
+    if(!h) return s; // worst case: unencoded
+    char* esc = curl_easy_escape(h, s.c_str(), (int)s.size());
+    std::string out = esc ? esc : "";
+    if (esc) curl_free(esc);
+    curl_easy_cleanup(h);
+    return out;
+}
+
+static std::string build_form_body(const std::vector<std::pair<std::string,std::string>>& kv){
+    std::ostringstream oss;
+    bool first = true;
+    for (auto& [k,v] : kv){
+        if(!first) oss << "&";
+        first = false;
+        oss << urlencode_component(k) << "=" << urlencode_component(v);
+    }
+    return oss.str();
+}
+
+static bool refresh_tokens() {
+
+    std::cout << "[bridge] refresh started\n";
+
+    // load current refresh token (as in the script)
+    std::string cur_refresh = trim(read_file(REFRESH_TOKEN_FILE));
+    if (cur_refresh.empty()) {
+        std::cerr << "[bridge] refresh: refresh_token.txt missing/empty\n";
+        return false;
+    }
+
+    // form body
+    const std::string url = "https://customer.bmwgroup.com/gcdm/oauth/token";
+    const std::string body = build_form_body({
+        {"grant_type",   "refresh_token"},
+        {"refresh_token",cur_refresh},
+        {"client_id",    CLIENT_ID}
+    });
+
+    // HTTP Request via libcurl
+    std::string resp;
+    long http_code = 0;
+
+    CURL* c = curl_easy_init();
+    if(!c){
+        std::cerr << "[bridge] curl_easy_init failed\n";
+        return false;
+    }
+
+    struct curl_slist* hdrs = nullptr;
+    hdrs = curl_slist_append(hdrs, "Content-Type: application/x-www-form-urlencoded");
+
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.size());
+
+    // Timeout/SSL
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L); // threadsafe timeouts
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "bmw-mqtt-bridge/1.0");
+
+    CURLcode rc = curl_easy_perform(c);
+    if (rc != CURLE_OK) {
+        std::cerr << "[bridge] curl perform failed: " << curl_easy_strerror(rc) << "\n";
+        curl_slist_free_all(hdrs);
+        curl_easy_cleanup(c);
+        return false;
+    }
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(c);
+
+    // save entire response (debug) – as in the script
+    // (pretty-printed, falls back to raw on parse error)
+    try {
+        json dbg = json::parse(resp);
+        write_file_mode("token_refresh_response.json", dbg.dump(2) + "\n", 0640);
+    } catch (...) {
+        // if not JSON: save raw response
+        write_file_mode("token_refresh_response.json", resp, 0640);
+    }
+
+    if (http_code != 200) {
+        std::cerr << "✖ Refresh HTTP " << http_code << ":\n" << resp << "\n";
+        return false;
+    }
+
+    // 5) parse JSON & check error (as in: if .error != "")
+    json j = json::parse(resp, nullptr, false);
+    if (j.is_discarded()) {
+        std::cerr << "✖ Refresh: invalid JSON\n";
+        return false;
+    }
+    if (j.contains("error") && !j["error"].is_null()) {
+        std::cerr << "✖ Refresh faild:\n" << j.dump(2) << "\n";
+        return false;
+    }
+
+    // extract tokens
+    std::string new_id  = j.value("id_token",      "");
+    std::string new_rt  = j.value("refresh_token", "");
+    std::string new_acc = j.value("access_token",  "");
+
+    // remove \r\n / trim
+    new_id  = trim(new_id);
+    new_rt  = trim(new_rt);
+    new_acc = trim(new_acc);
+
+    if (new_id.empty() || new_rt.empty() || new_acc.empty()) {
+        std::cerr << "✖ Refresh: missing data in response\n";
+        return false;
+    }
+
+    // store atomically – exactly like script (tmpdir → move)
+    char tmpl[] = "/tmp/bmwtokens.XXXXXX";
+    char* tmp = ::mkdtemp(tmpl);
+    if (!tmp) {
+        std::cerr << "[bridge] mkdtemp failed\n";
+        return false;
+    }
+    std::string tmpdir = tmp; // e.g. /tmp/bmwtokens.ABCDEF
+
+    bool ok = true;
+    ok &= write_file_mode(tmpdir + "/id_token.txt",      new_id,  0640);
+    ok &= write_file_mode(tmpdir + "/refresh_token.txt", new_rt,  0640);
+    ok &= write_file_mode(tmpdir + "/access_token.txt",  new_acc, 0640);
+
+    if (!ok) {
+        std::cerr << "[bridge] write tmp token files failed\n";
+        // Cleanup best-effort
+        std::error_code ec;
+        std::filesystem::remove_all(tmpdir, ec);
+        return false;
+    }
+
+    // move (rename is atomic on the same FS)
+    if (std::rename((tmpdir + "/id_token.txt").c_str(),      "id_token.txt")      != 0 ||
+        std::rename((tmpdir + "/refresh_token.txt").c_str(), "refresh_token.txt") != 0 ||
+        std::rename((tmpdir + "/access_token.txt").c_str(),  "access_token.txt")  != 0) {
+        std::cerr << "[bridge] rename() token files failed\n";
+        std::error_code ec;
+        std::filesystem::remove_all(tmpdir, ec);
+        return false;
+    }
+
+    // remove tmpdir
+    std::error_code ec;
+    std::filesystem::remove_all(tmpdir, ec);
+
+    // update in-memory as before
+    g_id_token      = new_id;
+    g_refresh_token = new_rt;
+    g_id_token_exp  = jwt_exp_unix(g_id_token);
+
+    std::cout << "✔ New Tokens saved:\n"
+              << "   id_token.txt, refresh_token.txt, access_token.txt\n";
+    std::cout << "[bridge] token refreshed via HTTP, exp=" << g_id_token_exp
+              << " (in " << (g_id_token_exp.load() - time(nullptr)) << "s)\n";
+
+    return true;
 }

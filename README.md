@@ -25,13 +25,24 @@ It authenticates via the official BMW OAuth2 device flow and continuously republ
 ```
 bmw-mqtt-bridge/
 │
-├── bmw_flow.sh          # Start OAuth2 device flow, get first tokens
-├── bmw_refresh.sh       # Refresh id_token using refresh_token
-├── bmw_mqtt_bridge.cpp  # Main bridge application (C++)
-├── compile.sh           # Simple build script (g++)
-├── install_deps.sh      # Installs required dependencies via apt
-├── json.hpp             # nlohmann/json header (MIT license)
-├── LICENSE              # MIT license
+├── demo/
+│   ├── bmwmap.html        # BMW map demonstration
+│   └── README.md          # Demo documentation
+│
+├── scripts/
+│   ├── bmw_flow.sh        # Start OAuth2 device flow, get first tokens
+│   ├── bmw_refresh.sh     # Refresh id_token using refresh_token
+│   ├── compile.sh         # Simple build script (g++)
+│   ├── docker-entrypoint.sh # Docker container entry point
+│   └── install_deps.sh    # Installs required dependencies via apt
+│
+├── src/
+│   ├── bmw_mqtt_bridge.cpp # Main bridge application (C++)
+│   └── json.hpp           # nlohmann/json header (MIT license)
+│
+├── docker-compose.yml     # Docker Compose configuration
+├── Dockerfile            # Docker build instructions
+├── LICENSE               # MIT license
 └── README.md            # This file
 ```
 
@@ -54,10 +65,10 @@ Tested on:
 git clone https://github.com/dj0abr/bmw-mqtt-bridge.git
 
 # Make scripts executable
-chmod +x install_deps.sh compile.sh bmw_flow.sh bmw_refresh.sh
+chmod -R +x scripts/
 
 # Install dependencies
-./install_deps.sh
+./scripts/install_deps.sh
 ```
 
 ---
@@ -70,18 +81,18 @@ chmod +x install_deps.sh compile.sh bmw_flow.sh bmw_refresh.sh
 3. Click on **"Create Client ID"**  
    ⚠️ *Do **not** click on "Authenticate Vehicle"*
 4. Copy the **Client ID** and insert it into:
-   - `bmw_flow.sh`
-   - `bmw_refresh.sh`
-   - `bmw_mqtt_bridge.cpp`
+   - `scripts/bmw_flow.sh`
+   - `scripts/bmw_refresh.sh`
+   - `scripts/bmw_mqtt_bridge.cpp`
 5. Scroll down to **CARDATA STREAM → Show Connection Details**
-6. Copy the **USERNAME** and insert it into `bmw_mqtt_bridge.cpp` as **GCID**
+6. Copy the **USERNAME** and insert it into `src/bmw_mqtt_bridge.cpp` as **GCID**
 
 ---
 
 ## ⚙️ Compile the Program
 
 ```bash
-./compile.sh
+./scripts/compile.sh
 ```
 
 ---
@@ -89,7 +100,7 @@ chmod +x install_deps.sh compile.sh bmw_flow.sh bmw_refresh.sh
 ## 🔑 Get Your First BMW Token
 
 ```bash
-./bmw_flow.sh
+./scripts/bmw_flow.sh
 ```
 
 1. A URL will be displayed in the terminal.  
@@ -103,7 +114,7 @@ If the `bmw_mqtt_bridge` is not used for more than 1 hour,
 you will need to log in again manually by running:
 
 ```bash
-./bmw_flow.sh
+./scripts/bmw_flow.sh
 ```
 
 ---

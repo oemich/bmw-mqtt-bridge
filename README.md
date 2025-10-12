@@ -150,15 +150,7 @@ After this setup, your bridge will be able to authenticate against the official 
 ## 📝 Notes
 
 - For direct usage, your MQTT broker (e.g., Mosquitto) must run locally on `127.0.0.1`.
-- If you run the broker on another host, change the IP in `src/bmw_mqtt_bridge.cpp`:
-
-```cpp
-#define LOCAL_HOST "127.0.0.1"
-```
-
-- Both variants (bare metal and Docker) use the same scripts and logic — only the environment differs.
-
----
+- If you run the broker on another host, enter the IP into `.env` file.
 
 ## 🔒 Security Notes
 

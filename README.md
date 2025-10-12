@@ -42,7 +42,7 @@ bmw-mqtt-bridge/
 │   ├── bmw_mqtt_bridge.cpp   # Core bridge logic (BMW ↔ MQTT)
 │   └── json.hpp              # nlohmann/json header (MIT license)
 │
-├── .env.example              # Example environment configuration for Docker
+├── .env.example              # Example environment configuration
 ├── docker-compose.yml        # Docker Compose setup
 ├── Dockerfile                # Docker image definition
 ├── LICENSE                   # MIT license
@@ -139,6 +139,7 @@ Before you can use the bridge, you must retrieve your personal **BMW CarData ide
 4. Copy the **Client ID** and insert it into the `.env` file
 5. Scroll down to **CARDATA STREAM → Show Connection Details**
 6. Copy the **USERNAME** and insert it into `.env` file as **GCID**
+7. The other options in the `.env` file are for advanced setups – you can safely ignore them in most cases
 
 After this setup, your bridge will be able to authenticate against the official BMW CarData MQTT interface.
 

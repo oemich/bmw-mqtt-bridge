@@ -175,4 +175,5 @@ licensed under the MIT License.
 
 Developed by **Kurt**  
 Docker setup and project structure by **oemich**  
+Uses the official BMW CARDATA STREAMING interface
 Contributions, pull requests, and improvements are welcome!

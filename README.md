@@ -143,6 +143,8 @@ Before you can use the bridge, you must retrieve your personal **BMW CarData ide
 
 After this setup, your bridge will be able to authenticate against the official BMW CarData MQTT interface.
 
+8. at **CARDATA STREAM** don't forget the click `Change data selection` and activate the topics you want to receive
+
 ---
 
 ## 📝 Notes

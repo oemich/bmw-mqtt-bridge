@@ -33,7 +33,7 @@
 // Features:
 //   - MQTT v5 with reason codes
 //   - Token expiry tracking via JWT "exp" claim
-//   - Soft/Hard token refresh via external refresh script
+//   - Soft/Hard token refresh via HTTP refresh (no external script required at runtime)
 //   - Connect watchdog + client rebuild
 //   - Backoff (incl. jitter) to avoid quota/rate-limit storms
 //   - LWT on local broker + status topic
@@ -43,20 +43,25 @@
 //       $(pkg-config --cflags --libs libmosquitto) -lcurl
 //
 // Runtime configuration (env overrides):
-//   CLIENT_ID        : BMW CarData client ID (GUID)              (default: placeholder)
-//   GCID             : BMW GCID / username for the MQTT broker   (default: placeholder)
+//   CLIENT_ID        : BMW CarData client ID (GUID)              (required; no default)
+//   GCID             : BMW GCID / username for the MQTT broker   (required; no default)
 //   BMW_HOST         : customer.streaming-cardata.bmwgroup.com   (default: set)
 //   BMW_PORT         : 9000                                      (default: 9000)
 //   LOCAL_HOST       : 127.0.0.1                                 (default: 127.0.0.1)
 //   LOCAL_PORT       : 1883                                      (default: 1883)
 //   LOCAL_PREFIX     : bmw/                                      (default: bmw/)
-//   ID_TOKEN_FILE    : ./id_token.txt                            (default: ./id_token.txt)
-//   REFRESH_FILE     : ./refresh_token.txt                       (default: ./refresh_token.txt)
-//   REFRESH_SCRIPT   : ./bmw_refresh.sh                          (default: ./bmw_refresh.sh)
+//   LOCAL_USER       : (optional)
+//   LOCAL_PASSWORD   : (optional)
+//
+// Token / .env location (fixed):
+//   XDG:  $XDG_STATE_HOME/bmw-mqtt-bridge/.env
+//   Fallback: $HOME/.local/state/bmw-mqtt-bridge/.env
+//   Token files are expected in the same directory:
+//     id_token.txt, refresh_token.txt, access_token.txt
 //
 // Notes:
 //   - id_token (a JWT) is used as the MQTT password; we parse its 'exp' to know validity.
-//   - The external refresh script must write id_token.txt and refresh_token.txt.
+//   - Files written by this program use permissions 0644.
 //
 // ------------------------------------------------------------------------
 
@@ -80,6 +85,7 @@
 #include <filesystem>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <regex>
 
 #ifndef NLOHMANN_JSON_HPP
   #include "json.hpp" // nlohmann/json header (json.hpp next to this file)
@@ -166,6 +172,22 @@ static std::string dirname_of(const std::string& p){
     return d.empty() ? std::string(".") : d.string();
 }
 
+// XDG-style token directory for current user
+static std::string token_dir() {
+    const char* xdg = std::getenv("XDG_STATE_HOME");
+    const char* home = std::getenv("HOME");
+    if (xdg && *xdg) return std::string(xdg) + "/bmw-mqtt-bridge";
+    if (home && *home) return std::string(home) + "/.local/state/bmw-mqtt-bridge";
+    // very rare fallback (no HOME): stay relative but consistent
+    return std::string("./.local/state/bmw-mqtt-bridge");
+}
+
+// helper: simple placeholder check for 1111-IDs
+static bool is_placeholder_uuid(const std::string& v){
+    static const std::regex all_ones("^1{8}-1{4}-1{4}-1{4}-1{12}$");
+    return v.empty() || std::regex_match(v, all_ones);
+}
+
 static void bmw_full_reconnect(){
     // alten Client sauber neu aufbauen
     if (g_bmw) {
@@ -237,7 +259,7 @@ static std::string base64url_decode(std::string s){
     for (size_t i=0; i<s.size(); i+=4){
         uint8_t a=b64tbl(s[i]), b=b64tbl(s[i+1]);
         uint8_t c=(s[i+2]=='=')?0xFF:b64tbl(s[i+2]);
-        uint8_t d=(s[i+3]=='=')?0xFF:b64tbl(s[i+3]);
+        uint8_t d = (s[i+3] == '=') ? 0xFF : b64tbl(s[i+3]);
         if(a==0xFF||b==0xFF) break;
         out.push_back(char((a<<2)|(b>>4)));
         if(c!=0xFF){
@@ -277,7 +299,7 @@ static void on_bmw_connect_v5(struct mosquitto*, void*, int rc, int flags, const
 
     if(rc == 0){
         g_connected = true;
-        std::string sub = GCID + "/+";
+        std::string sub = GCID + std::string("/+");
         int mid = 0;
         int s_rc = mosquitto_subscribe(g_bmw, &mid, sub.c_str(), 1);
         std::cerr << "[bridge] subscribe '" << sub << "' rc=" << s_rc << " mid=" << mid << "\n";
@@ -404,12 +426,14 @@ int main(){
     std::signal(SIGINT,  sigint_handler);
     std::signal(SIGTERM, sigint_handler);
 
-    // load .env if exists
-    load_env_file(".env");
+    // load .env from fixed token directory (created by bmw_flow.sh)
+    const std::string TDIR = token_dir();
+    const std::string ENV_PATH = (std::filesystem::path(TDIR) / ".env").string();
+    load_env_file(ENV_PATH);
 
     // initialize
-    CLIENT_ID        = env_str("CLIENT_ID",        "12345678-abcd-ef12-3456-789012345678");
-    GCID             = env_str("GCID",             "98765432-efdc-ba98-7654-321098765432");
+    CLIENT_ID        = env_str("CLIENT_ID",        "");
+    GCID             = env_str("GCID",             "");
     BMW_HOST         = env_str("BMW_HOST",         "customer.streaming-cardata.bmwgroup.com");
     BMW_PORT         = env_int("BMW_PORT",         9000);
     LOCAL_HOST       = env_str("LOCAL_HOST",       "127.0.0.1");
@@ -417,8 +441,26 @@ int main(){
     LOCAL_PREFIX     = env_str("LOCAL_PREFIX",     "bmw/");
     LOCAL_USER       = env_str("LOCAL_USER",       "");
     LOCAL_PASSWORD   = env_str("LOCAL_PASSWORD",   "");
-    ID_TOKEN_FILE    = env_str("ID_TOKEN_FILE",    "./id_token.txt");
-    REFRESH_TOKEN_FILE=env_str("REFRESH_TOKEN_FILE","./refresh_token.txt");
+    // fixed token files (no env overrides)
+    ID_TOKEN_FILE       = (std::filesystem::path(TDIR) / "id_token.txt").string();
+    REFRESH_TOKEN_FILE  = (std::filesystem::path(TDIR) / "refresh_token.txt").string();
+
+    // ensure token directory exists
+    if (!std::filesystem::exists(TDIR)) {
+        std::cerr << "✖ Token directory missing: " << TDIR << "\n"
+                  << "   Run scripts/bmw_flow.sh first.\n";
+        return 1;
+    }
+
+    // validate required IDs (no defaults; reject placeholders)
+    if (is_placeholder_uuid(CLIENT_ID)) {
+        std::cerr << "✖ CLIENT_ID missing or placeholder in " << ENV_PATH << "\n";
+        return 1;
+    }
+    if (is_placeholder_uuid(GCID)) {
+        std::cerr << "✖ GCID missing or placeholder in " << ENV_PATH << "\n";
+        return 1;
+    }
 
     // refresh logic constants
     constexpr long CLOCK_SKEW_SECS   = 60;    // 1 min safety for clock drift
@@ -430,7 +472,7 @@ int main(){
     g_id_token = trim(read_file(ID_TOKEN_FILE));
     g_refresh_token = trim(read_file(REFRESH_TOKEN_FILE));
     if(g_id_token.empty() || g_refresh_token.empty()){
-        std::cerr << "✖ id_token.txt or refresh_token.txt missing/empty.\n";
+        std::cerr << "✖ id_token.txt or refresh_token.txt missing/empty in " << TDIR << "\n";
         return 1;
     }
     g_id_token_exp = jwt_exp_unix(g_id_token);
@@ -594,8 +636,8 @@ int main(){
 
 // ============= refresh tokens =============
 
-// small utility: safely writes a file (0640)
-static bool write_file_mode(const std::string& path, const std::string& data, mode_t mode=0640){
+// small utility: safely writes a file (0644 default)
+static bool write_file_mode(const std::string& path, const std::string& data, mode_t mode=0644){
     int fd = ::open(path.c_str(), O_CREAT|O_TRUNC|O_WRONLY, mode);
     if (fd < 0) return false;
     ssize_t want = (ssize_t)data.size();
@@ -692,8 +734,8 @@ static bool refresh_tokens() {
     curl_easy_cleanup(c);
 
     // determine target paths based on configured files
-    std::string id_path  = ID_TOKEN_FILE;                  // e.g. "./id_token.txt"
-    std::string rt_path  = REFRESH_TOKEN_FILE;             // e.g. "./refresh_token.txt"
+    std::string id_path  = ID_TOKEN_FILE;
+    std::string rt_path  = REFRESH_TOKEN_FILE;
     std::string dir      = dirname_of(id_path);
     std::string at_path  = (std::filesystem::path(dir) / "access_token.txt").string();
 
@@ -702,11 +744,11 @@ static bool refresh_tokens() {
     try {
         json dbg = json::parse(resp);
         write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
-                        dbg.dump(2) + "\n", 0640);
+                        dbg.dump(2) + "\n", 0644);
     } catch (...) {
         // if not JSON: save raw response
         write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
-                        resp, 0640);
+                        resp, 0644);
     }
 
     if (http_code != 200) {
@@ -714,14 +756,14 @@ static bool refresh_tokens() {
         return false;
     }
 
-    // 5) parse JSON & check error (as in: if .error != "")
+    // parse JSON & check error
     json j = json::parse(resp, nullptr, false);
     if (j.is_discarded()) {
         std::cerr << "✖ Refresh: invalid JSON\n";
         return false;
     }
     if (j.contains("error") && !j["error"].is_null()) {
-        std::cerr << "✖ Refresh faild:\n" << j.dump(2) << "\n";
+        std::cerr << "✖ Refresh failed:\n" << j.dump(2) << "\n";
         return false;
     }
 
@@ -740,7 +782,7 @@ static bool refresh_tokens() {
         return false;
     }
 
-    // store atomically – exactly like script (tmpdir → move)
+    // store atomically – tmpdir → move
     char tmpl[] = "/tmp/bmwtokens.XXXXXX";
     char* tmp = ::mkdtemp(tmpl);
     if (!tmp) {
@@ -750,9 +792,9 @@ static bool refresh_tokens() {
     std::string tmpdir = tmp; // e.g. /tmp/bmwtokens.ABCDEF
 
     bool ok = true;
-    ok &= write_file_mode(tmpdir + "/id_token.txt",      new_id,  0640);
-    ok &= write_file_mode(tmpdir + "/refresh_token.txt", new_rt,  0640);
-    ok &= write_file_mode(tmpdir + "/access_token.txt",  new_acc, 0640);
+    ok &= write_file_mode(tmpdir + "/id_token.txt",      new_id,  0644);
+    ok &= write_file_mode(tmpdir + "/refresh_token.txt", new_rt,  0644);
+    ok &= write_file_mode(tmpdir + "/access_token.txt",  new_acc, 0644);
 
     if (!ok) {
         std::cerr << "[bridge] write tmp token files failed\n";
@@ -776,7 +818,7 @@ static bool refresh_tokens() {
     std::error_code ec;
     std::filesystem::remove_all(tmpdir, ec);
 
-    // update in-memory as before
+    // update in-memory
     g_id_token      = new_id;
     g_refresh_token = new_rt;
     g_id_token_exp  = jwt_exp_unix(g_id_token);

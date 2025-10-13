@@ -76,8 +76,6 @@ For direct use on Debian, Ubuntu or Raspberry Pi OS.
 # Clone the repository
 git clone https://github.com/dj0abr/bmw-mqtt-bridge.git
 cd bmw-mqtt-bridge
-cp .env.example .env
-nano .env   # see section "Get Your BMW IDs" below
 
 # Make scripts executable
 chmod +x scripts/*.sh
@@ -88,11 +86,16 @@ chmod +x scripts/*.sh
 # Compile
 ./scripts/compile.sh
 
-# Run OAuth2 Device Flow
+# Run OAuth2 Device Flow (creates .env automatically)
 ./scripts/bmw_flow.sh
 
-Open the displayed URL in your browser, log in,  
-then return and press **ENTER**.
+If this is your first run, the script will:
+- create ~/.local/state/bmw-mqtt-bridge/
+- open nano with a new .env file
+→ insert your CLIENT_ID and GCID there, then save and exit.
+
+After that, open the displayed URL in your browser, log in,
+then return and press ENTER.
 
 # Then start the bridge:
 
@@ -107,20 +110,32 @@ then return and press **ENTER**.
 # Clone the repository and prepare the environment
 git clone https://github.com/dj0abr/bmw-mqtt-bridge.git
 cd bmw-mqtt-bridge
-cp .env.example .env
-nano .env   # see section "Get Your BMW IDs" below
+
+The bridge stores its .env file and all token files **on the host system** under
+`~/.local/state/bmw-mqtt-bridge`.
+
+The Docker container automatically links to this folder,
+so host and container share the same configuration and tokens.
+You can freely switch between **Docker** and the **classic bare-metal** version without re-authenticating.
 
 # Build container
-docker compose build
+docker compose build --no-cache
 
-# Authenticate with BMW
-docker compose run --rm bmw-bridge ./bmw_flow.sh
+# Authenticate with BMW (creates .env automatically)
+docker compose run --rm -it bmw-bridge ./bmw_flow.sh
+
+If this is your first run, it will create `~/.local/state/bmw-mqtt-bridge/.env`
+and open the editor asking you to enter your CLIENT_ID and GCID before continuing.
+After you’ve saved and closed the editor, run the above command again.
 
 Open the displayed URL in your browser, log in,  
 then return and press **ENTER**.
 
 # Start bridge
 docker compose up -d
+
+# Logs
+docker compose logs -f bmw-bridge
 ```
 
 The bridge will now automatically stream BMW CarData to your local MQTT broker.
@@ -130,6 +145,10 @@ The bridge will now automatically stream BMW CarData to your local MQTT broker.
 ## 🆔 Get Your BMW IDs
 
 Before you can use the bridge, you must retrieve your personal **BMW CarData identifiers**.
+
+The script `scripts/bmw_flow.sh` automatically creates  
+`~/.local/state/bmw-mqtt-bridge/.env` and guides you to fill in the IDs which
+you get with the following procedure:
 
 1. Go to the [MyBMW website](https://www.bmw-connecteddrive.com/)  
    (You should already have an account and your car must be registered.)
@@ -151,6 +170,42 @@ After this setup, your bridge will be able to authenticate against the official 
 
 - For direct usage, your MQTT broker (e.g., Mosquitto) must run locally on `127.0.0.1`.
 - If you run the broker on another host, enter the IP into `.env` file.
+
+---
+
+## 🧰 Running as a System Service
+
+You can install the bridge as a systemd service so that it starts automatically on boot.
+
+```bash
+sudo cp scripts/bmw-mqtt-bridge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable bmw-mqtt-bridge.service
+sudo systemctl start bmw-mqtt-bridge.service
+```
+
+💡 **Important:**  
+Edit the file `/etc/systemd/system/bmw-mqtt-bridge.service`  
+and make sure that the line
+
+```
+User=pi
+```
+
+matches the username under which you normally run the bridge  
+(for example, `User=myname` or your own username).  
+The bridge stores its tokens in the user’s home directory  
+(`~/.local/state/bmw-mqtt-bridge`), so this must point to the correct account.
+
+Check the log output with:
+
+```bash
+journalctl -u bmw-mqtt-bridge -f
+```
+
+The service expects that you have already run  
+`scripts/bmw_flow.sh` at least once to create  
+`~/.local/state/bmw-mqtt-bridge/.env` and the token files.
 
 ## 🔒 Security Notes
 

@@ -39,13 +39,15 @@
 # Requirements:
 #   - bash, curl, jq, openssl
 #
-# Environment overrides (optional):
-#   CLIENT_ID            : your BMW CarData client ID (GUID)
-#   DEVICE_ENDPOINT      : defaults to https://customer.bmwgroup.com/gcdm/oauth/device/code
-#   TOKEN_ENDPOINT       : defaults to https://customer.bmwgroup.com/gcdm/oauth/token
-#   SCOPES               : defaults to "authenticate_user openid cardata:streaming:read"
+# Behavior:
+#   - On the first run, this script creates the directory:
+#       ~/.local/state/bmw-mqtt-bridge
+#   - If no .env file exists, it will be created automatically with placeholders
+#     and opened in your text editor (nano by default).
+#   - Enter your real CLIENT_ID and GCID, save, exit the editor,
+#     and then rerun the script.
 #
-# Outputs (in current directory, permissions 600):
+# Outputs (stored in ~/.local/state/bmw-mqtt-bridge, permissions 644):
 #   access_token.txt
 #   id_token.txt
 #   refresh_token.txt
@@ -57,24 +59,85 @@
 #   - id_token is a JWT that contains the 'exp' claim used by the bridge.
 #
 # Security:
-#   - Files are written with 600 permissions.
+#   - Files are written with safe permissions (rw-r--r--).
 #   - Do NOT commit real tokens/IDs to Git repositories.
+# -----------------------------------------------------------------------------
+
 
 set -euo pipefail
 
-# load .env if present (export all vars temporarily)
-if [[ -f ".env" ]]; then
-  set -a
-  . ./.env
-  set +a
+# ---------- Fixed locations (no path overrides) ----------
+STATE_BASE="${XDG_STATE_HOME:-$HOME/.local/state}"
+OUT_DIR="$STATE_BASE/bmw-mqtt-bridge"
+ENV_FILE="$OUT_DIR/.env"
+
+# Ensure token dir exists
+mkdir -p "$OUT_DIR"
+
+# ---------- Bootstrap .env if missing ----------
+if [[ ! -f "$ENV_FILE" ]]; then
+  cat >"$ENV_FILE" <<'EOF'
+# BMW CarData Credentials
+CLIENT_ID=11111111-1111-1111-1111-111111111111
+GCID=11111111-1111-1111-1111-111111111111
+
+# Optional MQTT Configuration
+#LOCAL_HOST=mosquitto
+#LOCAL_PORT=1883
+#LOCAL_PREFIX=bmw/
+#LOCAL_USER=username
+#LOCAL_PASSWORD=password
+EOF
+  if ! [ -t 0 ]; then
+    echo "Non-interactive mode detected."
+    echo "Run with an interactive TTY:"
+    echo "  docker compose run --rm -it bmw-bridge ./bmw_flow.sh"
+    exit 1
+  fi
+  echo "Created $ENV_FILE"
+  echo "Please enter your real CLIENT_ID and GCID into $ENV_FILE."
+  "${EDITOR:-nano}" "$ENV_FILE" || true
+  echo "Re-run this script after updating $ENV_FILE."
+  exit 1
 fi
 
-# ---------- Configuration (can be overridden via env) ----------
-: "${CLIENT_ID:=12345678-abcd-ef12-3456-789012345678}"  # Use default only if CLIENT_ID is unset or empty
+# ---------- Load .env from fixed location ----------
+set -a
+# shellcheck disable=SC1090
+. "$ENV_FILE"
+set +a
+
+# ---------- Validate CLIENT_ID / GCID ----------
+if [[ -z "${CLIENT_ID:-}" || "$CLIENT_ID" == "11111111-1111-1111-1111-111111111111" ]]; then
+  if ! [ -t 0 ]; then
+    echo "Non-interactive mode detected."
+    echo "Run with an interactive TTY:"
+    echo "  docker compose run --rm -it bmw-bridge ./bmw_flow.sh"
+    exit 1
+  fi
+  echo "✖ CLIENT_ID is missing or still the placeholder in $ENV_FILE." >&2
+  "${EDITOR:-nano}" "$ENV_FILE" || true
+  echo "Re-run this script after updating $ENV_FILE."
+  exit 1
+fi
+
+if [[ -z "${GCID:-}" || "$GCID" == "11111111-1111-1111-1111-111111111111" ]]; then
+  if ! [ -t 0 ]; then
+    echo "Non-interactive mode detected."
+    echo "Run with an interactive TTY:"
+    echo "  docker compose run --rm -it bmw-bridge ./bmw_flow.sh"
+    exit 1
+  fi
+  echo "✖ GCID is missing or still the placeholder in $ENV_FILE." >&2
+  "${EDITOR:-nano}" "$ENV_FILE" || true
+  echo "Re-run this script after updating $ENV_FILE."
+  exit 1
+fi
+
+# ---------- Static OAuth config ----------
 DEVICE_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/device/code"
 TOKEN_ENDPOINT="https://customer.bmwgroup.com/gcdm/oauth/token"
 SCOPES="authenticate_user openid cardata:streaming:read"
-: "${OUT_DIR:="."}"  # Use default only if OUT_DIR is unset or empty
 
 # ---------- Pre-flight checks ----------
 need() { command -v "$1" >/dev/null 2>&1 || { echo "✖ Missing dependency: $1" >&2; exit 1; }; }
@@ -82,18 +145,10 @@ need curl
 need jq
 need openssl
 
-if [[ "${CLIENT_ID}" == "12345678-abcd-ef12-3456-789012345678" ]]; then
-  echo "⚠ CLIENT_ID is still the placeholder. Export your real CLIENT_ID or edit the script." >&2
-fi
-
-# ensure we don't clobber world-readable files
-umask 077
-
-
-mkdir -p "$OUT_DIR"
+# We want token files to be world-readable enough for common service setups (owner RW, group/other R).
+umask 022
 
 # ---------- PKCE (per run) ----------
-# Create a URL-safe code_verifier (<= 128 chars) and its S256 code_challenge
 CODE_VERIFIER="$(openssl rand -base64 96 | tr -d '=+/ ' | cut -c1-96)"
 CODE_CHALLENGE="$(printf '%s' "$CODE_VERIFIER" \
   | openssl dgst -sha256 -binary \
@@ -111,7 +166,6 @@ RESP="$(curl -sS \
   --data-urlencode code_challenge_method="S256" \
   "$DEVICE_ENDPOINT")"
 
-# Basic parse
 DEVICE_CODE="$(jq -r '.device_code // empty' <<<"$RESP")"
 VERIFY_URL="$(jq -r '.verification_uri_complete // (.verification_uri + "?user_code=" + .user_code)' <<<"$RESP")"
 INTERVAL="$(jq -r '.interval // 5' <<<"$RESP")"
@@ -130,7 +184,9 @@ echo
 echo "2) Open the following URL in your browser and complete login/consent:"
 echo "   $VERIFY_URL"
 echo
+trap 'echo; echo "Aborted by user."; exit 1' INT
 read -r -p "Press Enter once you see 'Anmeldung erfolgreich / Login successful'… " _
+trap - INT
 
 echo
 echo "3) Polling token endpoint every ${INTERVAL}s (timeout ~${EXPIRES_IN}s)…"
@@ -152,13 +208,14 @@ while (( LEFT > 0 )); do
     echo "✔ Tokens received:"
     echo "$TOK" | jq '{access_token: .access_token|type, id_token: (.id_token|type), refresh_token: (.refresh_token|type), expires_in}'
 
-    # write tokens (600 due to umask)
-    jq -r '.access_token'  <<<"$TOK" > $OUT_DIR/access_token.txt
-    jq -r '.id_token'      <<<"$TOK" > $OUT_DIR/id_token.txt
-    jq -r '.refresh_token' <<<"$TOK" > $OUT_DIR/refresh_token.txt
+    # Write tokens into fixed OUT_DIR (permissions end up 0644 due to umask 022)
+    jq -r '.access_token'  <<<"$TOK" > "$OUT_DIR/access_token.txt"
+    jq -r '.id_token'      <<<"$TOK" > "$OUT_DIR/id_token.txt"
+    jq -r '.refresh_token' <<<"$TOK" > "$OUT_DIR/refresh_token.txt"
+    chmod 0644 "$OUT_DIR"/{access_token.txt,id_token.txt,refresh_token.txt} || true
 
-    echo "Saved: access_token.txt, id_token.txt, refresh_token.txt"
-    echo "→ MQTT password = contents of id_token.txt"
+    echo "Saved tokens in: $OUT_DIR"
+    echo "→ MQTT password = contents of $OUT_DIR/id_token.txt"
     exit 0
   else
     DESC="$(jq -r '.error_description // ""' <<<"$TOK")"
@@ -176,7 +233,7 @@ while (( LEFT > 0 )); do
         ;;
       expired_token|expired_device_code|invalid_grant)
         printf "\n✖ Device code expired/invalid. %s\n" "$DESC" >&2
-        echo "Hint: this happens if CODE_VERIFIER doesn't match the device-code run." >&2
+        echo "Hint: CODE_VERIFIER must match the device-code run." >&2
         exit 1
         ;;
       *)

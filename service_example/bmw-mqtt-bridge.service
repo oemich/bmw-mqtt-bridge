@@ -29,7 +29,7 @@
 # -----------------------------------------------------------------------------
 # Example installation:
 #
-#   sudo cp scripts/bmw-mqtt-bridge.service /etc/systemd/system/
+#   sudo cp service_example/bmw-mqtt-bridge.service /etc/systemd/system/
 #
 #   !!! This service runs as user "pi" adjust if needed. !!!
 #

@@ -52,12 +52,10 @@ Wants=network-online.target
 
 [Service]
 # ------------------------------------------------------------------
-# !!! This service runs as user "pi" adjust if needed. !!!
-# %h expands to the home directory of the configured user.
+# !!! This service runs as user "myUserName" adjust if needed. !!!
 # ------------------------------------------------------------------
-User=pi
-WorkingDirectory=%h/bmw-mqtt-bridge
-ExecStart=%h/bmw-mqtt-bridge/src/bmw_mqtt_bridge
+WorkingDirectory=/home/myUserName/bmw-mqtt-bridge
+ExecStart=/home/myUserName/bmw-mqtt-bridge/src/bmw_mqtt_bridge
 
 # Restart behavior if the bridge exits or crashes
 Restart=always

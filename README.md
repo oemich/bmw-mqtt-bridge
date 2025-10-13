@@ -189,6 +189,7 @@ sudo nano /etc/systemd/system/bmw-mqtt-bridge.service
 ```
 and make sure that the lines
 ```
+User=myUserName
 WorkingDirectory=/home/myUserName/bmw-mqtt-bridge
 ExecStart=/home/myUserName/bmw-mqtt-bridge/src/bmw_mqtt_bridge
 ```

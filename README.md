@@ -176,6 +176,7 @@ After this setup, your bridge will be able to authenticate against the official 
 ## 🧰 Running as a System Service
 
 You can install the bridge as a systemd service so that it starts automatically on boot.
+Copy the sample service definition:
 
 ```bash
 sudo cp service_example/bmw-mqtt-bridge.service /etc/systemd/system/
@@ -186,12 +187,12 @@ Edit the file `/etc/systemd/system/bmw-mqtt-bridge.service`
 ```bash
 sudo nano /etc/systemd/system/bmw-mqtt-bridge.service
 ```
-and make sure that the line
+and make sure that the lines
 ```
-User=pi
+WorkingDirectory=/home/myUserName/bmw-mqtt-bridge
+ExecStart=/home/myUserName/bmw-mqtt-bridge/src/bmw_mqtt_bridge
 ```
 matches the username under which you normally run the bridge  
-(for example, `User=myname` , your own username).  
 
 
 ```bash

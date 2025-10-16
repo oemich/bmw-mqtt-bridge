@@ -674,6 +674,209 @@ static std::string build_form_body(const std::vector<std::pair<std::string,std::
     return oss.str();
 }
 
+static bool write_file_atomic(const std::string& final_path,
+                              const std::string& data,
+                              mode_t mode = 0644)
+{
+    namespace fs = std::filesystem;
+
+    fs::path fpath(final_path);
+    fs::path dir = fpath.parent_path();
+    std::error_code ec;
+    fs::create_directories(dir, ec); // ignorierbar, wir loggen nur bei echten Fehlern später
+
+    // tmp-Datei im gleichen Verzeichnis erzeugen
+    std::string tmpl = (dir / (fpath.filename().string() + ".tmp.XXXXXX")).string();
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+
+    int tfd = ::mkstemp(buf.data()); // erzeugt .../filename.tmp.ABC123
+    if (tfd < 0) {
+        std::cerr << "[bridge] mkstemp failed: " << std::strerror(errno) << "\n";
+        return false;
+    }
+
+    // Rechte setzen (unabhängig von umask)
+    if (::fchmod(tfd, mode) != 0) {
+        std::cerr << "[bridge] fchmod failed: " << std::strerror(errno) << "\n";
+        ::close(tfd);
+        ::unlink(buf.data());
+        return false;
+    }
+
+    // schreiben (vollständig)
+    const char* p = data.data();
+    ssize_t left = (ssize_t)data.size();
+    while (left > 0) {
+        ssize_t n = ::write(tfd, p, left);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            std::cerr << "[bridge] write failed: " << std::strerror(errno) << "\n";
+            ::close(tfd);
+            ::unlink(buf.data());
+            return false;
+        }
+        left -= n; p += n;
+    }
+
+    // flushen
+    if (::fsync(tfd) != 0) {
+        std::cerr << "[bridge] fsync(tmp) failed: " << std::strerror(errno) << "\n";
+        ::close(tfd);
+        ::unlink(buf.data());
+        return false;
+    }
+    ::close(tfd);
+
+    // atomar ersetzen (gleiches FS ⇒ kein EXDEV)
+    if (::rename(buf.data(), final_path.c_str()) != 0) {
+        std::cerr << "[bridge] rename failed: " << std::strerror(errno)
+                  << " (errno=" << errno << ")\n";
+        ::unlink(buf.data());
+        return false;
+    }
+
+    // Verzeichnis-Flush (damit das Rename selbst crash-sicher ist)
+    int dfd = ::open(dir.c_str(), O_RDONLY | O_DIRECTORY);
+    if (dfd >= 0) {
+        (void)::fsync(dfd);
+        ::close(dfd);
+    }
+
+    return true;
+}
+
+static bool refresh_tokens() {
+
+    std::cout << "[bridge] refresh started\n";
+
+    // load current refresh token (as in the script)
+    std::string cur_refresh = trim(read_file(REFRESH_TOKEN_FILE));
+    if (cur_refresh.empty()) {
+        std::cerr << "[bridge] refresh: refresh_token.txt missing/empty\n";
+        return false;
+    }
+
+    // form body
+    const std::string url = "https://customer.bmwgroup.com/gcdm/oauth/token";
+    const std::string body = build_form_body({
+        {"grant_type",   "refresh_token"},
+        {"refresh_token",cur_refresh},
+        {"client_id",    CLIENT_ID}
+    });
+
+    // HTTP Request via libcurl
+    std::string resp;
+    long http_code = 0;
+
+    CURL* c = curl_easy_init();
+    if(!c){
+        std::cerr << "[bridge] curl_easy_init failed\n";
+        return false;
+    }
+
+    struct curl_slist* hdrs = nullptr;
+    hdrs = curl_slist_append(hdrs, "Content-Type: application/x-www-form-urlencoded");
+
+    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
+    curl_easy_setopt(c, CURLOPT_POST, 1L);
+    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
+    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.size());
+
+    // Timeout/SSL
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 20L);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L); // threadsafe timeouts
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curl_write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "bmw-mqtt-bridge/1.0");
+
+    CURLcode rc = curl_easy_perform(c);
+    if (rc != CURLE_OK) {
+        std::cerr << "[bridge] curl perform failed: " << curl_easy_strerror(rc) << "\n";
+        curl_slist_free_all(hdrs);
+        curl_easy_cleanup(c);
+        return false;
+    }
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+
+    curl_slist_free_all(hdrs);
+    curl_easy_cleanup(c);
+
+    // determine target paths based on configured files
+    std::string id_path  = ID_TOKEN_FILE;
+    std::string rt_path  = REFRESH_TOKEN_FILE;
+    std::string dir      = dirname_of(id_path);
+    std::string at_path  = (std::filesystem::path(dir) / "access_token.txt").string();
+
+    // save entire response (debug) in same directory as token files
+    try {
+        json dbg = json::parse(resp);
+        write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
+                        dbg.dump(2) + "\n", 0644);
+    } catch (...) {
+        write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
+                        resp, 0644);
+    }
+
+    if (http_code != 200) {
+        std::cerr << "✖ Refresh HTTP " << http_code << ":\n" << resp << "\n";
+        return false;
+    }
+
+    // parse JSON & check error
+    json j = json::parse(resp, nullptr, false);
+    if (j.is_discarded()) {
+        std::cerr << "✖ Refresh: invalid JSON\n";
+        return false;
+    }
+    if (j.contains("error") && !j["error"].is_null()) {
+        std::cerr << "✖ Refresh failed:\n" << j.dump(2) << "\n";
+        return false;
+    }
+
+    // extract tokens
+    std::string new_id  = j.value("id_token",      "");
+    std::string new_rt  = j.value("refresh_token", "");
+    std::string new_acc = j.value("access_token",  "");
+
+    // remove \r\n / trim
+    new_id  = trim(new_id);
+    new_rt  = trim(new_rt);
+    new_acc = trim(new_acc);
+
+    if (new_id.empty() || new_rt.empty() || new_acc.empty()) {
+        std::cerr << "✖ Refresh: missing data in response\n";
+        return false;
+    }
+
+    // --- Atomar direkt ins Zielverzeichnis schreiben (kein /tmp mehr) ---
+    bool ok = true;
+    ok &= write_file_atomic(id_path, new_id, 0644);
+    ok &= write_file_atomic(rt_path, new_rt, 0644);
+    ok &= write_file_atomic(at_path, new_acc, 0644);
+
+    if (!ok) {
+        std::cerr << "[bridge] writing tokens atomically failed\n";
+        return false;
+    }
+
+    // update in-memory
+    g_id_token      = new_id;
+    g_refresh_token = new_rt;
+    g_id_token_exp  = jwt_exp_unix(g_id_token);
+
+    std::cout << "✔ New Tokens saved:\n"
+              << "   id_token.txt, refresh_token.txt, access_token.txt\n";
+    std::cout << "[bridge] token refreshed via HTTP, exp=" << g_id_token_exp
+              << " (in " << (g_id_token_exp.load() - time(nullptr)) << "s)\n";
+
+    return true;
+}
+
+/*
 static bool refresh_tokens() {
 
     std::cout << "[bridge] refresh started\n";
@@ -830,3 +1033,6 @@ static bool refresh_tokens() {
 
     return true;
 }
+
+*/
+

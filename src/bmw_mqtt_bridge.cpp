@@ -145,6 +145,7 @@ static int         LOCAL_PORT;
 static std::string LOCAL_PREFIX;
 static std::string LOCAL_USER;
 static std::string LOCAL_PASSWORD;
+static std::string LOCAL_STATUS_TOPIC;
 static std::string ID_TOKEN_FILE;
 static std::string REFRESH_TOKEN_FILE;
 
@@ -213,7 +214,7 @@ static void publish_status(bool connected) {
     j["connected"] = connected;
     j["timestamp"] = static_cast<long>(time(nullptr));
     std::string payload = j.dump();
-    mosquitto_publish(g_local, nullptr, "bmw/status",
+    mosquitto_publish(g_local, nullptr, LOCAL_STATUS_TOPIC.c_str(),
                       payload.size(), payload.data(), 0, true);
 }
 
@@ -520,6 +521,15 @@ int main(){
     // fixed token files (no env overrides)
     ID_TOKEN_FILE       = (std::filesystem::path(TDIR) / "id_token.txt").string();
     REFRESH_TOKEN_FILE  = (std::filesystem::path(TDIR) / "refresh_token.txt").string();
+    // Prefix-Fallback + normalization
+    if (LOCAL_PREFIX.empty()) {
+        LOCAL_PREFIX = "bmw/";             // Fallback: keeps bmw/status as default
+    }
+    if (LOCAL_PREFIX.back() != '/') {
+        LOCAL_PREFIX.push_back('/');       // just for protection
+    }
+    LOCAL_STATUS_TOPIC = LOCAL_PREFIX + "status";
+    std::cerr << "[bridge] using status topic: " << LOCAL_STATUS_TOPIC << "\n";
 
     // Ensure LOCAL_PREFIX ends with '/'
     if (!LOCAL_PREFIX.empty() && LOCAL_PREFIX.back() != '/') {
@@ -575,7 +585,7 @@ int main(){
 
     mosquitto_reconnect_delay_set(g_local, 1, 10, true);
     const char* lwt = "{\"connected\":false}";
-    mosquitto_will_set(g_local, "bmw/status", strlen(lwt), lwt, 0, true);
+    mosquitto_will_set(g_local, LOCAL_STATUS_TOPIC.c_str(), strlen(lwt), lwt, 0, true);
 
     // Set credentials if provided
     if (!LOCAL_USER.empty() && !LOCAL_PASSWORD.empty()) {
@@ -956,164 +966,4 @@ static bool refresh_tokens() {
 
     return true;
 }
-
-/*
-static bool refresh_tokens() {
-
-    std::cout << "[bridge] refresh started\n";
-
-    // load current refresh token (as in the script)
-    std::string cur_refresh = trim(read_file(REFRESH_TOKEN_FILE));
-    if (cur_refresh.empty()) {
-        std::cerr << "[bridge] refresh: refresh_token.txt missing/empty\n";
-        return false;
-    }
-
-    // form body
-    const std::string url = "https://customer.bmwgroup.com/gcdm/oauth/token";
-    const std::string body = build_form_body({
-        {"grant_type",   "refresh_token"},
-        {"refresh_token",cur_refresh},
-        {"client_id",    CLIENT_ID}
-    });
-
-    // HTTP Request via libcurl
-    std::string resp;
-    long http_code = 0;
-
-    CURL* c = curl_easy_init();
-    if(!c){
-        std::cerr << "[bridge] curl_easy_init failed\n";
-        return false;
-    }
-
-    struct curl_slist* hdrs = nullptr;
-    hdrs = curl_slist_append(hdrs, "Content-Type: application/x-www-form-urlencoded");
-
-    curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
-    curl_easy_setopt(c, CURLOPT_POST, 1L);
-    curl_easy_setopt(c, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(c, CURLOPT_POSTFIELDSIZE, (long)body.size());
-
-    // Timeout/SSL
-    curl_easy_setopt(c, CURLOPT_TIMEOUT, 20L);
-    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 0L);
-    curl_easy_setopt(c, CURLOPT_NOSIGNAL, 1L); // threadsafe timeouts
-    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curl_write_cb);
-    curl_easy_setopt(c, CURLOPT_WRITEDATA, &resp);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "bmw-mqtt-bridge/1.0");
-
-    CURLcode rc = curl_easy_perform(c);
-    if (rc != CURLE_OK) {
-        std::cerr << "[bridge] curl perform failed: " << curl_easy_strerror(rc) << "\n";
-        curl_slist_free_all(hdrs);
-        curl_easy_cleanup(c);
-        return false;
-    }
-    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
-
-    curl_slist_free_all(hdrs);
-    curl_easy_cleanup(c);
-
-    // determine target paths based on configured files
-    std::string id_path  = ID_TOKEN_FILE;
-    std::string rt_path  = REFRESH_TOKEN_FILE;
-    std::string dir      = dirname_of(id_path);
-    std::string at_path  = (std::filesystem::path(dir) / "access_token.txt").string();
-
-    // save entire response (debug) in same directory as token files
-    // (pretty-printed, falls back to raw on parse error)
-    try {
-        json dbg = json::parse(resp);
-        write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
-                        dbg.dump(2) + "\n", 0644);
-    } catch (...) {
-        // if not JSON: save raw response
-        write_file_mode((std::filesystem::path(dir) / "token_refresh_response.json").string(),
-                        resp, 0644);
-    }
-
-    if (http_code != 200) {
-        std::cerr << "✖ Refresh HTTP " << http_code << ":\n" << resp << "\n";
-        return false;
-    }
-
-    // parse JSON & check error
-    json j = json::parse(resp, nullptr, false);
-    if (j.is_discarded()) {
-        std::cerr << "✖ Refresh: invalid JSON\n";
-        return false;
-    }
-    if (j.contains("error") && !j["error"].is_null()) {
-        std::cerr << "✖ Refresh failed:\n" << j.dump(2) << "\n";
-        return false;
-    }
-
-    // extract tokens
-    std::string new_id  = j.value("id_token",      "");
-    std::string new_rt  = j.value("refresh_token", "");
-    std::string new_acc = j.value("access_token",  "");
-
-    // remove \r\n / trim
-    new_id  = trim(new_id);
-    new_rt  = trim(new_rt);
-    new_acc = trim(new_acc);
-
-    if (new_id.empty() || new_rt.empty() || new_acc.empty()) {
-        std::cerr << "✖ Refresh: missing data in response\n";
-        return false;
-    }
-
-    // store atomically – tmpdir → move
-    char tmpl[] = "/tmp/bmwtokens.XXXXXX";
-    char* tmp = ::mkdtemp(tmpl);
-    if (!tmp) {
-        std::cerr << "[bridge] mkdtemp failed\n";
-        return false;
-    }
-    std::string tmpdir = tmp; // e.g. /tmp/bmwtokens.ABCDEF
-
-    bool ok = true;
-    ok &= write_file_mode(tmpdir + "/id_token.txt",      new_id,  0644);
-    ok &= write_file_mode(tmpdir + "/refresh_token.txt", new_rt,  0644);
-    ok &= write_file_mode(tmpdir + "/access_token.txt",  new_acc, 0644);
-
-    if (!ok) {
-        std::cerr << "[bridge] write tmp token files failed\n";
-        // Cleanup best-effort
-        std::error_code ec;
-        std::filesystem::remove_all(tmpdir, ec);
-        return false;
-    }
-
-    // move (rename is atomic on the same FS) to configured target paths
-    if (std::rename((tmpdir + "/id_token.txt").c_str(),      id_path.c_str()) != 0 ||
-        std::rename((tmpdir + "/refresh_token.txt").c_str(), rt_path.c_str()) != 0 ||
-        std::rename((tmpdir + "/access_token.txt").c_str(),  at_path.c_str()) != 0) {
-        std::cerr << "[bridge] rename() token files failed\n";
-        std::error_code ec;
-        std::filesystem::remove_all(tmpdir, ec);
-        return false;
-    }
-
-    // remove tmpdir
-    std::error_code ec;
-    std::filesystem::remove_all(tmpdir, ec);
-
-    // update in-memory
-    g_id_token      = new_id;
-    g_refresh_token = new_rt;
-    g_id_token_exp  = jwt_exp_unix(g_id_token);
-
-    std::cout << "✔ New Tokens saved:\n"
-              << "   id_token.txt, refresh_token.txt, access_token.txt\n";
-    std::cout << "[bridge] token refreshed via HTTP, exp=" << g_id_token_exp
-              << " (in " << (g_id_token_exp.load() - time(nullptr)) << "s)\n";
-
-    return true;
-}
-
-*/
 

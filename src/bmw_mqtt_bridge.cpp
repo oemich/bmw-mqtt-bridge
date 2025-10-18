@@ -146,6 +146,7 @@ static std::string LOCAL_PREFIX;
 static std::string LOCAL_USER;
 static std::string LOCAL_PASSWORD;
 static std::string LOCAL_STATUS_TOPIC;
+static int         SPLIT_TOPICS = 0;
 static std::string ID_TOKEN_FILE;
 static std::string REFRESH_TOKEN_FILE;
 
@@ -237,6 +238,14 @@ static bool write_file(const std::string& path, const std::string& data) {
     if (!f) return false;
     f << data;
     return true;
+}
+
+// Ersetzt problematische Zeichen in Topic-Keys
+static std::string sanitize_key(std::string s){
+    for (auto& c : s){
+        if (c=='/' || c==' ' || c=='\t' || c=='\r' || c=='\n') c = '_';
+    }
+    return s;
 }
 
 // ---- Base64url decode (no OpenSSL; safe handling of '=' padding) ----
@@ -337,96 +346,61 @@ static void on_bmw_disconnect_v5(struct mosquitto*, void*, int rc,
 }
 
 static void on_bmw_message(struct mosquitto*, void*, const struct mosquitto_message* m){
-    // Original topic in format GCID/<VIN>/....
+    if (!m || !m->topic) return;
     std::string in_topic = m->topic ? m->topic : "";
 
-    // Republishing the exact message in ..../raw/<VIN>/....
+    // Republishing: 1) RAW (neu)  2) Legacy (alt)
     auto pos = in_topic.find('/');
-    std::string out_topic = LOCAL_PREFIX + "raw" + (pos!=std::string::npos ? in_topic.substr(pos) : "");
-    int rc = mosquitto_publish(g_local, nullptr, out_topic.c_str(), m->payloadlen, m->payload, 0, false);
+    std::string raw_topic    = LOCAL_PREFIX + "raw" + (pos!=std::string::npos ? in_topic.substr(pos)   : "");
+    std::string legacy_topic = LOCAL_PREFIX          + (pos!=std::string::npos ? in_topic.substr(pos+1) : in_topic);
 
-    std::cerr << "[bridge] fwd rc=" << rc
+    int rc1 = mosquitto_publish(g_local, nullptr, raw_topic.c_str(), m->payloadlen, m->payload, 0, false);
+    int rc2 = mosquitto_publish(g_local, nullptr, legacy_topic.c_str(), m->payloadlen, m->payload, 0, false);
+
+    std::cerr << "[bridge] fwd rc1=" << rc1
+              << " rc2=" << rc2
               << " in='"  << in_topic
-              << "' out='"<< out_topic
-              << "' bytes="<< (m ? m->payloadlen : 0)
-              << " qos="   << (m ? m->qos : -1)
-              << " retain="<< (m ? (int)m->retain : -1)
-              << "\n";
+              << "' raw='"<< raw_topic
+              << "' legacy='"<< legacy_topic
+              << "' bytes="<< m->payloadlen << "\n";
 
-    // Parsing the message payload and publishing in dedicated appropiate topic
+    // Optional: Splitten aktiv?
+    if (!SPLIT_TOPICS || !m->payload || m->payloadlen <= 0)
+        return;
+
     try {
-        // Parse incoming JSON payload
-        std::string payload_str(static_cast<char*>(m->payload), m->payloadlen);
-        auto j = json::parse(payload_str);
+        std::string payload_str(static_cast<const char*>(m->payload), static_cast<size_t>(m->payloadlen));
+        auto j = json::parse(payload_str, nullptr, true);
 
-        // Extract VIN from payload or topic
         std::string vin;
-
-        // VIN from payload
         if (j.contains("vin") && j["vin"].is_string()) {
             vin = j["vin"].get<std::string>();
         }
-
-        // Fallback: VIN from topic (GCID/<VIN>/...)
         if (vin.empty()) {
             auto pos = in_topic.find('/');
             if (pos != std::string::npos) {
-                auto next = in_topic.find('/', pos+1);
-
-                if (next != std::string::npos) {
-                    vin = in_topic.substr(pos+1, next - (pos+1));
-                } 
-                else {
-                    // Take everything from pos+1 to the end
-                    vin = in_topic.substr(pos+1);
-                }
-
-                if (vin.size() != 17) {
-                    throw std::runtime_error("Invalid VIN length extracted from topic: " + vin);
-                }
+                auto next = in_topic.find('/', pos + 1);
+                if (next != std::string::npos)
+                    vin = in_topic.substr(pos + 1, next - (pos + 1));
             }
         }
-
-        if (vin.empty()) {
-            throw std::runtime_error("VIN not found in payload or topic");
-        }
+        if (vin.empty() || vin.size() != 17)
+            throw std::runtime_error("invalid or missing VIN");
 
         if (j.contains("data") && j["data"].is_object()) {
             for (auto& [propName, propObj] : j["data"].items()) {
                 if (propObj.contains("value")) {
-                    // Extend topic with propertyName
-                    std::string prop_topic = LOCAL_PREFIX + "vehicles/" + vin + "/" + propName;
-
-                    // Dump the entire object { value, timestamp, unit }
-                    // .dump() ensures correct stringification (works for numbers, strings, etc.)
-                    std::string value_str = propObj.dump(); 
-
-                    int rc = mosquitto_publish(
-                        g_local,
-                        nullptr,
-                        prop_topic.c_str(),
-                        value_str.size(),
-                        value_str.data(),
-                        0,
-                        false
-                    );
-
-                    std::cerr << "[bridge] fwd rc=" << rc
-                              << " in='"  << in_topic
-                              << "' out='"<< prop_topic
-                              << "' value="<< value_str
-                              << " bytes="<< value_str.size()
-                              << " qos="   << (m ? m->qos : -1)
-                              << " retain="<< (m ? (int)m->retain : -1)
-                              << "\n";
+                    std::string topic = LOCAL_PREFIX + "vehicles/" + vin + "/" + sanitize_key(propName);
+                    std::string val = propObj.dump();
+                    int rc = mosquitto_publish(g_local, nullptr, topic.c_str(),
+                                               val.size(), val.data(), 0, false);
+                    std::cerr << "[bridge] split '" << topic << "' val=" << val << " rc=" << rc << "\n";
                 }
             }
+        } else {
+            throw std::runtime_error("No valid data in payload");
         }
-        else {
-            throw std::runtime_error("No valid data in payloyad " + payload_str);
-        }
-    } 
-    catch (const std::exception& e) {
+    } catch (const std::exception& e) {
         std::cerr << "[bridge] JSON parse error: " << e.what() << "\n";
     }
 }
@@ -518,6 +492,8 @@ int main(){
     LOCAL_PREFIX     = env_str("LOCAL_PREFIX",     "bmw/");
     LOCAL_USER       = env_str("LOCAL_USER",       "");
     LOCAL_PASSWORD   = env_str("LOCAL_PASSWORD",   "");
+    SPLIT_TOPICS     = env_int("SPLIT_TOPICS",     0);
+
     // fixed token files (no env overrides)
     ID_TOKEN_FILE       = (std::filesystem::path(TDIR) / "id_token.txt").string();
     REFRESH_TOKEN_FILE  = (std::filesystem::path(TDIR) / "refresh_token.txt").string();

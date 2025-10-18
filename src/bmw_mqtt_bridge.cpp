@@ -416,9 +416,17 @@ static void on_bmw_log(struct mosquitto* /*mosq*/, void* /*userdata*/,
         g_last_connect_attempt = time(nullptr);
     }
 
-    if (std::strstr(str, "OpenSSL Error")
-        || std::strstr(str, "SSL")
-        || std::strstr(str, "unexpected eof"))
+    // nur auf echte Fehler reagieren – KEIN generisches "SSL" matchen
+    bool is_err_level =
+        (level == MOSQ_LOG_ERR) ||
+        (level == MOSQ_LOG_WARNING);
+
+    if (is_err_level &&
+    (std::strstr(str, "OpenSSL Error") ||
+        std::strstr(str, "SSL error") ||               // nur Fehler, nicht jede SSL-Zeile
+        std::strstr(str, "Connection reset by peer") ||
+        std::strstr(str, "unexpected eof") ||
+        std::strstr(str, "protocol error")))
     {
         g_connected = false;
         publish_status(false);

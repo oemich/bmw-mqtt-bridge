@@ -215,6 +215,78 @@ The service expects that you have already run
 `scripts/bmw_flow.sh` at least once to create  
 `~/.local/state/bmw-mqtt-bridge/.env` and the token files.
 
+## 🌐 MQTT Topics and Environment Variables
+
+### Status Topic Prefix
+
+By default, the bridge publishes its connection status to:
+
+```
+bmw/status
+```
+
+If you want a different topic prefix (for example if you have multiple cars or bridges),
+you can configure it using the environment variable:
+
+```
+LOCAL_PREFIX=mycar/
+```
+
+The bridge will then publish:
+
+```
+mycar/status
+```
+
+and all other MQTT messages (e.g. `raw`, `vehicles`, etc.) under the same prefix.
+
+---
+
+### Split Topics (Structured JSON Publishing)
+
+By default, the bridge republishes BMW CarData messages exactly as received
+into a local topic of the form:
+
+```
+bmw/raw/<VIN>/<eventName>
+```
+
+To make integration easier for automation systems (like Home Assistant, Node-RED, etc.),
+you can optionally enable **split topics**, which publish each data field under its own sub-topic:
+
+Enable with:
+
+```bash
+export SPLIT_TOPICS=1
+```
+
+or add to your `.env` file:
+
+```
+SPLIT_TOPICS=1
+```
+
+This will create additional messages like:
+
+```
+bmw/vehicles/<VIN>/fuelPercentage {"value":62.5,"unit":"%","timestamp":1739790000}
+bmw/vehicles/<VIN>/range_km       {"value":420}
+bmw/vehicles/<VIN>/position       {"value":{"lat":48.1,"lon":11.6},"timestamp":1739790100}
+```
+
+If disabled (default), the bridge will only publish the raw combined payload.
+
+---
+
+### Overview of MQTT Output Topics
+
+| Purpose            | Example Topic                                           | Description                          |
+|--------------------|---------------------------------------------------------|--------------------------------------|
+| Connection Status  | `bmw/status`                                           | JSON `{ "connected": true/false }`   |
+| Raw Payload        | `bmw/raw/<VIN>/<eventName>`                            | Original BMW message as received     |
+| Legacy Payload     | `bmw/<VIN>/<eventName>`                                | (optional) same payload without `/raw` |
+| Split Data (opt.)  | `bmw/vehicles/<VIN>/<propertyName>`                    | Individual vehicle data fields       |
+
 ## 🔒 Security Notes
 
 - BMW CarData is a private API — use responsibly.  
@@ -238,6 +310,7 @@ licensed under the MIT License.
 
 Developed by **Kurt**  
 Docker setup and project structure by **oemich**  
+extended MQTT topics by **grogi**
 Uses the official BMW CARDATA STREAMING interface 
 
 Contributions, pull requests, and improvements are welcome!

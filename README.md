@@ -301,7 +301,7 @@ The **status topic** `bmw/status` is always retained (LWT), regardless of this s
 
 ### Enable
 
-**.env**
+edit the file: **.env**
 ```ini
 # enable retained messages for republished topics
 MQTT_RETAIN=1

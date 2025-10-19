@@ -53,7 +53,7 @@
 //   LOCAL_USER       : (optional)
 //   LOCAL_PASSWORD   : (optional)
 //   SPLIT_TOPICS     : 0/1  (default: 0; split JSON into per-signal topics)
-//   STATUS_STABLE_DELAY : seconds until bmw/status_stable goes to false false (default: 5; 0 = immediately)
+//   STATUS_STABLE_DELAY : seconds until bmw/status goes to false false (default: 5; 0 = immediately)
 //
 //
 // Token / .env location (fixed):
@@ -150,7 +150,7 @@ static std::string LOCAL_USER;
 static std::string LOCAL_PASSWORD;
 static std::string LOCAL_STATUS_TOPIC;
 static int         SPLIT_TOPICS = 0;
-static int         STATUS_STABLE_DELAY = 5; // seconds; 0 = no Delay
+static int         STATUS_STABLE_DELAY = 5; // seconds; 0 = no delay
 static std::string ID_TOKEN_FILE;
 static std::string REFRESH_TOKEN_FILE;
 static int         MQTT_RETAIN = 0; // 0 = no retain (default), 1 = retain
@@ -167,9 +167,6 @@ static mosquitto* g_local = nullptr;
 static std::atomic<bool> g_connected{false};
 static std::atomic<long> g_last_connect_attempt{0};
 static std::atomic<long> g_next_connect_after{0}; // backoff fence for (re)connects
-
-static std::string LOCAL_STATUS_STABLE_TOPIC;
-static std::atomic<bool> g_status_stable_pub{false};
 
 static std::mt19937 rng{std::random_device{}()};
 static long jitter_ms(long base_ms){ std::uniform_int_distribution<int> d(-250,250); return base_ms + d(rng); }
@@ -217,29 +214,46 @@ static void bmw_full_reconnect(){
     std::cerr << "[bridge] rebuild+connect rc=" << rc << "\n";
 }
 
-static void publish_status_instant(bool connected) {
+// Debounced status publisher for LOCAL_STATUS_TOPIC
+static void publish_status(bool connected) {
+    static long  disconnected_since = 0;   // 0 = not currently timing
+    static bool  last_published     = false;
+    static bool  initialized        = false;
+
     if (!g_local) return;
-    json j;
-    j["connected"] = connected;
-    j["timestamp"] = static_cast<long>(time(nullptr));
-    std::string payload = j.dump();
-    mosquitto_publish(g_local, nullptr, LOCAL_STATUS_TOPIC.c_str(),
-                      payload.size(), payload.data(), 0, true);
-}
 
-static void publish_status_stable(bool connected) {
-    if (!g_local) return;
-    if (g_status_stable_pub.load() == connected) return; // nichts zu tun
+    auto do_publish = [&](bool val){
+        json j;
+        j["connected"] = val;
+        j["timestamp"] = static_cast<long>(time(nullptr));
+        std::string payload = j.dump();
+        mosquitto_publish(g_local, nullptr, LOCAL_STATUS_TOPIC.c_str(),
+                          payload.size(), payload.data(), 0, true);
+        last_published = val;
+        initialized = true;
+    };
 
-    json j;
-    j["connected"] = connected;
-    j["timestamp"] = static_cast<long>(time(nullptr));
-    std::string payload = j.dump();
+    if (connected) {
+        disconnected_since = 0;
+        if (!initialized || last_published != true) {
+            do_publish(true); // sofort auf true
+        }
+        return;
+    }
 
-    mosquitto_publish(g_local, nullptr, LOCAL_STATUS_STABLE_TOPIC.c_str(),
-                      payload.size(), payload.data(), 0, true);
-
-    g_status_stable_pub = connected;
+    // connected == false
+    if (STATUS_STABLE_DELAY == 0) {
+        if (!initialized || last_published != false) {
+            do_publish(false); // sofort auf false
+        }
+        disconnected_since = 0;
+        return;
+    }
+    long now = time(nullptr);
+    if (disconnected_since == 0) { disconnected_since = now; return; }
+    if ((now - disconnected_since) >= STATUS_STABLE_DELAY && (!initialized || last_published != false)) {
+        do_publish(false); // nach Delay auf false
+    }
 }
 
 static std::string read_file(const std::string& path) {
@@ -336,7 +350,7 @@ static void on_bmw_connect_v5(struct mosquitto*, void*, int rc, int flags, const
         int mid = 0;
         int s_rc = mosquitto_subscribe(g_bmw, &mid, sub.c_str(), 1);
         std::cerr << "[bridge] subscribe '" << sub << "' rc=" << s_rc << " mid=" << mid << "\n";
-        publish_status_instant(true);
+        publish_status(true);
         g_last_connect_attempt = 0;
         return;
     }
@@ -350,13 +364,13 @@ static void on_bmw_connect_v5(struct mosquitto*, void*, int rc, int flags, const
 
     g_next_connect_after = now + delay + (jitter_ms(0)/1000);
     g_connected = false;
-    publish_status_instant(false);
+    publish_status(false);
 }
 
 static void on_bmw_disconnect(struct mosquitto*, void*, int rc){
     std::cout << "[bridge] BMW disconnect rc=" << rc << "\n";
     g_connected = false;
-    publish_status_instant(false);
+    publish_status(false);
 }
 
 static void on_bmw_disconnect_v5(struct mosquitto*, void*, int rc,
@@ -365,7 +379,7 @@ static void on_bmw_disconnect_v5(struct mosquitto*, void*, int rc,
     std::cerr << "[bridge] BMW disconnect_v5 rc=" << rc
               << " (" << (reason ? reason : "unknown") << ")\n";
     g_connected = false;
-    publish_status_instant(false);
+    publish_status(false);
 }
 
 static void on_bmw_message(struct mosquitto*, void*, const struct mosquitto_message* m){
@@ -457,7 +471,7 @@ static void on_bmw_log(struct mosquitto* /*mosq*/, void* /*userdata*/,
         std::strstr(str, "protocol error")))
     {
         g_connected = false;
-        publish_status_instant(false);
+        publish_status(false);
         long now = time(nullptr);
         g_next_connect_after = now + 5 + (jitter_ms(0)/1000);
     }
@@ -541,15 +555,13 @@ int main(){
     if (LOCAL_PREFIX.back() != '/') {
         LOCAL_PREFIX.push_back('/');       // just for protection
     }
-    LOCAL_STATUS_TOPIC        = LOCAL_PREFIX + "status";
-    LOCAL_STATUS_STABLE_TOPIC = LOCAL_PREFIX + "status_stable";
-    std::cerr << "[bridge] using status topic: "         << LOCAL_STATUS_TOPIC        << "\n";
-    std::cerr << "[bridge] using status_stable topic: " << LOCAL_STATUS_STABLE_TOPIC << "\n";
+    LOCAL_STATUS_TOPIC = LOCAL_PREFIX + "status";
+    std::cerr << "[bridge] using status topic: " << LOCAL_STATUS_TOPIC << "\n"; 
 
     STATUS_STABLE_DELAY = env_int("STATUS_STABLE_DELAY", 5);
     if (STATUS_STABLE_DELAY < 0) STATUS_STABLE_DELAY = 0;
     if (STATUS_STABLE_DELAY > 3600) STATUS_STABLE_DELAY = 3600;
-    std::cerr << "[bridge] status_stable delay: " << STATUS_STABLE_DELAY << "s\n";
+    std::cerr << "[bridge] status delay: " << STATUS_STABLE_DELAY << "s\n";
 
 
     // ensure token directory exists
@@ -602,7 +614,6 @@ int main(){
     mosquitto_reconnect_delay_set(g_local, 1, 10, true);
     const char* lwt = "{\"connected\":false}";
     mosquitto_will_set(g_local, LOCAL_STATUS_TOPIC.c_str(), strlen(lwt), lwt, 0, true);
-    mosquitto_will_set(g_local, LOCAL_STATUS_STABLE_TOPIC.c_str(), strlen(lwt), lwt, 0, true);
 
     // Set credentials if provided
     if (!LOCAL_USER.empty() && !LOCAL_PASSWORD.empty()) {
@@ -613,7 +624,7 @@ int main(){
         std::cerr << "connect local failed\n"; return 3;
     }
     mosquitto_loop_start(g_local);
-    publish_status_instant(false);
+    publish_status(false);
 
     // BMW broker
     g_bmw = create_bmw_client();
@@ -648,34 +659,6 @@ int main(){
             return (now - last_successful_refresh) >= HARD_REFRESH_SECS;
     };
 
-    auto status_stable_tick = [](){
-        static long disconnected_since = 0;
-        bool inst = g_connected.load();
-
-        if (inst) {
-            disconnected_since = 0;
-            publish_status_stable(true);   
-            return;
-        }
-
-        // hier: instant=false
-        if (STATUS_STABLE_DELAY == 0) {
-            // no Debounce
-            publish_status_stable(false);
-            disconnected_since = 0;
-            return;
-        }
-
-        long now = time(nullptr);
-        if (disconnected_since == 0) {
-            disconnected_since = now;        // Start delay
-            return;
-        }
-        if ((now - disconnected_since) >= STATUS_STABLE_DELAY) {
-            publish_status_stable(false);    // goto false after delay time
-        }
-    };
-
     while(!g_stop){
         std::this_thread::sleep_for(std::chrono::seconds(1));
         long now = time(nullptr);
@@ -703,7 +686,7 @@ int main(){
                 }
 
                 g_connected = false;
-                publish_status_instant(false);
+                publish_status(false);
 
                 // leichtes Backoff + Jitter wie beim Script-Flow
                 long delay_ms = 1500 + (rng()%500);
@@ -727,7 +710,7 @@ int main(){
 
             std::cerr << "[bridge] CONNECT timed out or handshake failed -> full mosquitto client rebuild\n";
             g_connected = false;
-            publish_status_instant(false);
+            publish_status(false);
 
             if (g_bmw) {
                 mosquitto_loop_stop(g_bmw, true);
@@ -752,7 +735,7 @@ int main(){
             }
         }
 
-        status_stable_tick();
+        publish_status(g_connected.load());
     }
 
     // Cleanup

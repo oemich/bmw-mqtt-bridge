@@ -6,7 +6,6 @@ By default, the bridge publishes its connection status to:
 
 ```
 bmw/status
-bmw/status_stable
 ```
 
 If you want a different topic prefix (for example if you have multiple cars or bridges),  
@@ -20,19 +19,21 @@ The bridge will then publish:
 
 ```
 mycar/status
-mycar/status_stable
 ```
 
 and all other MQTT messages (e.g. `raw`, `vehicles`, etc.) under the same prefix.
 
 **status:**
 
-Indicates the current connection state to the BMW MQTT broker (true = connected, false = disconnected).
+Reports the connection state to the BMW MQTT broker (true = connected, false = disconnected).
 
-**status_stable:**
+true is published immediately when the connection is established.
 
-Same as status, but the transition from true to false is delayed by 5 seconds (the delay can be configured in seconds via the environment variable STATUS_STABLE_DELAY).
-This prevents short disconnects — for example during token refresh — from causing flickering in clients that monitor connection status.
+false is published only after STATUS_STABLE_DELAY seconds of continuous disconnect (default: 5).
+
+Set STATUS_STABLE_DELAY=0 to disable the delay (instant switching).
+
+This debounce avoids brief drops (e.g., during token refresh) from causing flicker in clients that monitor the status.
 
 ---
 

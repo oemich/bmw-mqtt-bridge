@@ -52,6 +52,8 @@
 //   LOCAL_PREFIX     : bmw/                                      (default: bmw/)
 //   LOCAL_USER       : (optional)
 //   LOCAL_PASSWORD   : (optional)
+//   SPLIT_TOPICS     : 0/1  (default: 0; split JSON into per-signal topics)
+//
 //
 // Token / .env location (fixed):
 //   XDG:  $XDG_STATE_HOME/bmw-mqtt-bridge/.env
@@ -149,6 +151,7 @@ static std::string LOCAL_STATUS_TOPIC;
 static int         SPLIT_TOPICS = 0;
 static std::string ID_TOKEN_FILE;
 static std::string REFRESH_TOKEN_FILE;
+static int         MQTT_RETAIN = 0; // 0 = no retain (default), 1 = retain
 
 // ===================== Globals =====================
 static std::atomic<bool> g_stop{false};
@@ -354,11 +357,15 @@ static void on_bmw_message(struct mosquitto*, void*, const struct mosquitto_mess
     std::string raw_topic    = LOCAL_PREFIX + "raw" + (pos!=std::string::npos ? in_topic.substr(pos)   : "");
     std::string legacy_topic = LOCAL_PREFIX          + (pos!=std::string::npos ? in_topic.substr(pos+1) : in_topic);
 
-    int rc1 = mosquitto_publish(g_local, nullptr, raw_topic.c_str(), m->payloadlen, m->payload, 0, false);
-    int rc2 = mosquitto_publish(g_local, nullptr, legacy_topic.c_str(), m->payloadlen, m->payload, 0, false);
-
+    bool retain_flag = (MQTT_RETAIN != 0);
+    int rc1 = mosquitto_publish(g_local, nullptr, raw_topic.c_str(),
+                                m->payloadlen, m->payload, 0, retain_flag);
+    int rc2 = mosquitto_publish(g_local, nullptr, legacy_topic.c_str(),
+                                m->payloadlen, m->payload, 0, retain_flag);
+       
     std::cerr << "[bridge] fwd rc1=" << rc1
               << " rc2=" << rc2
+              << " retain=" << (retain_flag ? 1 : 0)
               << " in='"  << in_topic
               << "' raw='"<< raw_topic
               << "' legacy='"<< legacy_topic
@@ -393,7 +400,8 @@ static void on_bmw_message(struct mosquitto*, void*, const struct mosquitto_mess
                     std::string topic = LOCAL_PREFIX + "vehicles/" + vin + "/" + sanitize_key(propName);
                     std::string val = propObj.dump();
                     int rc = mosquitto_publish(g_local, nullptr, topic.c_str(),
-                                               val.size(), val.data(), 0, false);
++                                               val.size(), val.data(),
++                                               0, retain_flag);
                     std::cerr << "[bridge] split '" << topic << "' val=" << val << " rc=" << rc << "\n";
                 }
             }
@@ -501,6 +509,7 @@ int main(){
     LOCAL_USER       = env_str("LOCAL_USER",       "");
     LOCAL_PASSWORD   = env_str("LOCAL_PASSWORD",   "");
     SPLIT_TOPICS     = env_int("SPLIT_TOPICS",     0);
+    MQTT_RETAIN      = env_int("MQTT_RETAIN",      0);
 
     // fixed token files (no env overrides)
     ID_TOKEN_FILE       = (std::filesystem::path(TDIR) / "id_token.txt").string();
@@ -514,6 +523,8 @@ int main(){
     }
     LOCAL_STATUS_TOPIC = LOCAL_PREFIX + "status";
     std::cerr << "[bridge] using status topic: " << LOCAL_STATUS_TOPIC << "\n";
+    std::cerr << "[bridge] MQTT retain for republished topics: "
+              << (MQTT_RETAIN ? "ENABLED" : "disabled") << "\n";
 
     // Ensure LOCAL_PREFIX ends with '/'
     if (!LOCAL_PREFIX.empty() && LOCAL_PREFIX.back() != '/') {

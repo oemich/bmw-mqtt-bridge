@@ -1,0 +1,52 @@
+# 🌐 MQTT Topics and Environment Variables
+
+### Status Topic Prefix
+
+By default, the bridge publishes its connection status to:
+
+```
+bmw/status
+```
+
+If you want a different topic prefix (for example if you have multiple cars or bridges),  
+you can configure it using this environment variable in your .env file:
+
+```
+LOCAL_PREFIX=mycar/
+```
+
+The bridge will then publish:
+
+```
+mycar/status
+```
+
+and all other MQTT messages (e.g. `raw`, `vehicles`, etc.) under the same prefix.
+
+---
+
+### Split Topics (Structured JSON Publishing)
+
+By default, the bridge republishes BMW CarData messages exactly as received  
+into a local topic of the form:
+
+```
+bmw/raw/<VIN>/<eventName>
+```
+
+To make integration easier for automation systems (like Home Assistant, Node-RED, etc.),  
+you can optionally enable **split topics**, which publish each data field under its own sub-topic:
+
+add to your `.env` file:
+
+```
+SPLIT_TOPICS=1
+```
+
+This will create additional messages like:
+
+```
+bmw/vehicles/<VIN>/fuelPercentage {"value":62.5,"unit":"%","timestamp":1739790000}
+bmw/vehicles/<VIN>/range_km       {"value":420}
+bmw/vehicles/<VIN>/position       {"value":{"lat":48.1,"lon":11.6},"timestamp":1739790100}
+```

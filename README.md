@@ -1,5 +1,8 @@
 # 🚗 BMW CarData → MQTT Bridge
 
+[![Docs](https://img.shields.io/badge/docs-online-brightgreen)](https://dj0abr.github.io/bmw-mqtt-bridge/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 After BMW disabled access for *bimmerconnected*, an alternative solution was required.  
 The best working replacement is the new **BMW CarData MQTT streaming interface**,  
 which this bridge connects to and forwards to your local MQTT broker.
@@ -23,329 +26,35 @@ You can run it **directly on Debian/Ubuntu/Raspberry Pi** or inside a **Docker c
 
 ---
 
-## 🧱 Project Structure
-
-```
-bmw-mqtt-bridge/
-│
-├── demo/                     # Example web client (map demo)
-│   ├── bmwmap.html           # Simple HTML page showing vehicle on a map
-│   └── README.md             # Instructions for demo usage
-│
-├── scripts/                  # Helper scripts and utilities
-│   ├── bmw_flow.sh           # Start OAuth2 device flow and fetch first tokens
-│   ├── compile.sh            # Simple build script (g++)
-│   ├── docker-entrypoint.sh  # Entrypoint for Docker container
-│   └── install_deps.sh       # Installs dependencies (libmosquitto, libcurl, etc.)
-│
-├── src/                      # Main C++ source files
-│   ├── bmw_mqtt_bridge.cpp   # Core bridge logic (BMW ↔ MQTT)
-│   └── json.hpp              # nlohmann/json header (MIT license)
-│
-├── .env.example              # Example environment configuration
-├── docker-compose.yml        # Docker Compose setup
-├── Dockerfile                # Docker image definition
-├── LICENSE                   # MIT license
-└── README.md                 # This file
-```
+📘 **Full documentation:**  
+➡️ https://dj0abr.github.io/bmw-mqtt-bridge/
 
 ---
 
-## ⚙️ Requirements
-
-Tested on:
-- Debian 12 / Ubuntu 22.04+ / Raspberry Pi OS Bookworm
-- libmosquitto ≥ 2.0
-- libcurl ≥ 7.74
-- g++ ≥ 10
-- (optional) Docker ≥ 24 with Compose plugin
-
----
-
-## ⚙️ Installation
-
-You can install and run the bridge either **natively (bare metal)** or via **Docker**.
-
----
-
-### 🧩 Option 1 – Classic Installation (without Docker)
-
-For direct use on Debian, Ubuntu or Raspberry Pi OS.
+## Quick start
 
 ```bash
-# Clone the repository
 git clone https://github.com/dj0abr/bmw-mqtt-bridge.git
 cd bmw-mqtt-bridge
-
-# Make scripts executable
-chmod +x scripts/*.sh
-
-# Install dependencies
-./scripts/install_deps.sh
-
-# Compile
-./scripts/compile.sh
-
-# Run OAuth2 Device Flow (creates .env automatically)
-./scripts/bmw_flow.sh
-
-If this is your first run, the script will:
-- create ~/.local/state/bmw-mqtt-bridge/
-- open nano with a new .env file
-→ insert your CLIENT_ID and GCID there, then save and exit.
-
-After that, open the displayed URL in your browser, log in,
-then return and press ENTER.
-
-# Then start the bridge:
-
-./src/bmw_mqtt_bridge
 ```
+
+Choose one of the installation methods described in the documentation:
+
+- [Classic installation](https://dj0abr.github.io/bmw-mqtt-bridge/install/)
+- [Docker setup](https://dj0abr.github.io/bmw-mqtt-bridge/docker/)
 
 ---
 
-### 🐳 Option 2 – Docker Installation
+## Usage
 
-```bash
-# Clone the repository and prepare the environment
-git clone https://github.com/dj0abr/bmw-mqtt-bridge.git
-cd bmw-mqtt-bridge
-
-The bridge stores its .env file and all token files **on the host system** under
-`~/.local/state/bmw-mqtt-bridge`.
-
-The Docker container automatically links to this folder,
-so host and container share the same configuration and tokens.
-You can freely switch between **Docker** and the **classic bare-metal** version without re-authenticating.
-
-# Build container
-docker compose build --no-cache
-
-# Authenticate with BMW (creates .env automatically)
-docker compose run --rm -it bmw-bridge ./bmw_flow.sh
-
-If this is your first run, it will create `~/.local/state/bmw-mqtt-bridge/.env`
-and open the editor asking you to enter your CLIENT_ID and GCID before continuing.
-After you’ve saved and closed the editor, run the above command again.
-
-Open the displayed URL in your browser, log in,  
-then return and press **ENTER**.
-
-# Start bridge
-docker compose up -d
-
-# Logs
-docker compose logs -f bmw-bridge
-```
-
-The bridge will now automatically stream BMW CarData to your local MQTT broker.
+- [Environment variables (.env)](https://dj0abr.github.io/bmw-mqtt-bridge/env/)
+- [MQTT topics](https://dj0abr.github.io/bmw-mqtt-bridge/mqtt/)
+- [MQTT retain](https://dj0abr.github.io/bmw-mqtt-bridge/retain/)
+- [System service (systemd)](https://dj0abr.github.io/bmw-mqtt-bridge/service/)
 
 ---
 
-## 🆔 Get Your BMW IDs
+## License
 
-Before you can use the bridge, you must retrieve your personal **BMW CarData identifiers**.
-
-The script `scripts/bmw_flow.sh` automatically creates  
-`~/.local/state/bmw-mqtt-bridge/.env` and guides you to fill in the IDs which
-you get with the following procedure:
-
-1. Go to the [MyBMW website](https://www.bmw-connecteddrive.com/)  
-   (You should already have an account and your car must be registered.)
-2. Navigate to **Personal Data → My Vehicles → CarData**  
-3. Click on **"Create Client ID"**  
-   ⚠️ *Do **not** click on "Authenticate Vehicle"!*
-4. Copy the **Client ID** and insert it into the `.env` file
-5. Scroll down to **CARDATA STREAM → Show Connection Details**
-6. Copy the **USERNAME** and insert it into `.env` file as **GCID**
-7. The other options in the `.env` file are for advanced setups – you can safely ignore them in most cases
-
-After this setup, your bridge will be able to authenticate against the official BMW CarData MQTT interface.
-
-8. at **CARDATA STREAM** don't forget the click `Change data selection` and activate the topics you want to receive
-
----
-
-## 📝 Notes
-
-- For direct usage, your MQTT broker (e.g., Mosquitto) must run locally on `127.0.0.1`.
-- If you run the broker on another host, enter the IP into `.env` file.
-
----
-
-## 🧰 Running as a System Service
-
-You can install the bridge as a systemd service so that it starts automatically on boot.
-Copy the sample service definition:
-
-```bash
-sudo cp service_example/bmw-mqtt-bridge.service /etc/systemd/system/
-```
-
-💡 **Important:**  
-Edit the file `/etc/systemd/system/bmw-mqtt-bridge.service`  
-```bash
-sudo nano /etc/systemd/system/bmw-mqtt-bridge.service
-```
-and make sure that the lines
-```
-User=myUserName
-WorkingDirectory=/home/myUserName/bmw-mqtt-bridge
-ExecStart=/home/myUserName/bmw-mqtt-bridge/src/bmw_mqtt_bridge
-```
-matches the username under which you normally run the bridge  
-
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable bmw-mqtt-bridge.service
-sudo systemctl start bmw-mqtt-bridge.service
-```
-
-The bridge stores its tokens in the user’s home directory  
-(`~/.local/state/bmw-mqtt-bridge`), so this must point to the correct account.
-
-Check the log output with:
-
-```bash
-journalctl -u bmw-mqtt-bridge -f
-```
-
-The service expects that you have already run  
-`scripts/bmw_flow.sh` at least once to create  
-`~/.local/state/bmw-mqtt-bridge/.env` and the token files.
-
-## 🌐 MQTT Topics and Environment Variables
-
-### Status Topic Prefix
-
-By default, the bridge publishes its connection status to:
-
-```
-bmw/status
-```
-
-If you want a different topic prefix (for example if you have multiple cars or bridges),
-you can configure it using the environment variable:
-
-```
-LOCAL_PREFIX=mycar/
-```
-
-The bridge will then publish:
-
-```
-mycar/status
-```
-
-and all other MQTT messages (e.g. `raw`, `vehicles`, etc.) under the same prefix.
-
----
-
-### Split Topics (Structured JSON Publishing)
-
-By default, the bridge republishes BMW CarData messages exactly as received
-into a local topic of the form:
-
-```
-bmw/raw/<VIN>/<eventName>
-```
-
-To make integration easier for automation systems (like Home Assistant, Node-RED, etc.),
-you can optionally enable **split topics**, which publish each data field under its own sub-topic:
-
-Enable with:
-
-```bash
-export SPLIT_TOPICS=1
-```
-
-or add to your `.env` file:
-
-```
-SPLIT_TOPICS=1
-```
-
-This will create additional messages like:
-
-```
-bmw/vehicles/<VIN>/fuelPercentage {"value":62.5,"unit":"%","timestamp":1739790000}
-bmw/vehicles/<VIN>/range_km       {"value":420}
-bmw/vehicles/<VIN>/position       {"value":{"lat":48.1,"lon":11.6},"timestamp":1739790100}
-```
-
-If disabled (default), the bridge will only publish the raw combined payload.
-
----
-
-### Overview of MQTT Output Topics
-
-| Purpose            | Example Topic                                           | Description                          |
-|--------------------|---------------------------------------------------------|--------------------------------------|
-| Connection Status  | `bmw/status`                                           | JSON `{ "connected": true/false }`   |
-| Raw Payload        | `bmw/raw/<VIN>/<eventName>`                            | Original BMW message as received     |
-| Legacy Payload     | `bmw/<VIN>/<eventName>`                                | (optional) same payload without `/raw` |
-| Split Data (opt.)  | `bmw/vehicles/<VIN>/<propertyName>`                    | Individual vehicle data fields       |
-
-## 🔁 MQTT Retain (optional)
-
-To ensure Home Assistant and other clients immediately see the last known state after a restart, the bridge can publish its republished MQTT messages **with the Retain flag**.
-
-**Default:** off (`MQTT_RETAIN=0`)  
-**When enabled:** Retain applies to:
-- `bmw/raw/<VIN>/<eventName>`
-- `bmw/<VIN>/<eventName>` (Legacy)
-- `bmw/vehicles/<VIN>/<propertyName>` (when `SPLIT_TOPICS=1`)
-
-The **status topic** `bmw/status` is always retained (LWT), regardless of this setting, to keep availability tracking consistent.
-
-### Enable
-
-edit the file: **.env**
-```ini
-# enable retained messages for republished topics
-MQTT_RETAIN=1
-```
-
-### Clean up (remove retained messages)
-
-If you want to clear a topic:
-```bash
-# remove retained message (send empty retained message)
-mosquitto_pub -t 'bmw/vehicles/<VIN>/range_km' -r -n
-```
-or, alternatively, use MQTT Explorer
-
-### Notes
-
-- For **stateful topics** (e.g. door lock, availability, battery values) retain is very useful.  
-- For **high-frequency or transient** topics, retain may be undesirable (it shows an outdated snapshot).  
-- If you later change your `LOCAL_PREFIX`, old retained messages under the previous prefix will remain in your broker until you remove them manually (see above).
-
-## 🔒 Security Notes
-
-- BMW CarData is a private API — use responsibly.  
-- Never publish or share your `id_token` / `refresh_token`.  
-- Tokens expire automatically; the bridge refreshes them securely.  
-- Keep your Mosquitto broker private or protected by authentication.  
-
----
-
-## 🧾 License
-
-MIT License  
-Copyright (c) 2025 Kurt, DJ0ABR
-
-This project also includes [`nlohmann/json`](https://github.com/nlohmann/json)  
-licensed under the MIT License.
-
----
-
-## ☕ Credits
-
-Developed by **Kurt**  
-Docker setup and project structure by **oemich**  
-extended MQTT topics by **grogi**  
-Uses the official BMW CARDATA STREAMING interface 
-
-Contributions, pull requests, and improvements are welcome!
+MIT License © 2025 Kurt, DJ0ABR  
+See [LICENSE](LICENSE) for details.

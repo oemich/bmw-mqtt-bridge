@@ -44,6 +44,7 @@ Validation on startup:
 | Variable       | Type | Default | Required | Description |
 |----------------|------|---------|----------|-------------|
 | `LOCAL_PREFIX` | str  | `bmw/`  | No       | Topic prefix for all republished topics. If empty, the program falls back to `bmw/`. A trailing slash is **enforced** automatically. |
+| `STATUS_STABLE_DELAY` | int  | 5  | No       | delay time for bmw connection state_stable true->false: anti flickering during token refresh |
 
 ## ✂️ Split Topics
 

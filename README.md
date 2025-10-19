@@ -1,8 +1,6 @@
 # 🚗 BMW CarData → MQTT Bridge
 
-<a href="https://dj0abr.github.io/bmw-mqtt-bridge/" target="_blank" rel="noopener">
-  <img src="https://img.shields.io/badge/docs-online-brightgreen" alt="Docs" />
-</a>
+[![Docs](https://img.shields.io/badge/docs-online-brightgreen)](https://dj0abr.github.io/bmw-mqtt-bridge/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 After BMW disabled access for *bimmerconnected*, an alternative solution was required.  

@@ -44,9 +44,9 @@ docker build -t bmw-mqtt-bridge:custom .
 
 # Authenticate with BMW (creates .env automatically)
 docker run -it --rm \
-  -v ~/.local/state/bmw-mqtt-bridge:/app/state \
-  -e TZ=Europe/Berlin \
-  bmw-mqtt-bridge:custom ./bmw_flow.sh
+    -v ~/.local/state/bmw-mqtt-bridge:/app/state \
+    -e TZ=Europe/Berlin \
+    bmw-mqtt-bridge:custom ./bmw_flow.sh
 
 # Start the bridge in detached mode
 docker run -d \
